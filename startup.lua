@@ -1,35 +1,73 @@
 local monitor = peripheral.find("monitor")
-if not monitor then
-    print("No monitor attached.")
-    return
+if monitor then
+    monitor.setTextScale(1)
 end
 
-monitor.setTextScale(1)
-local w = monitor.getSize()
+local function clear(screen)
+    screen.setBackgroundColour(colours.black)
+    screen.clear()
+end
 
-monitor.setBackgroundColour(colours.black)
-monitor.clear()
+local function draw_bar(screen, time)
+    local w = screen.getSize()
 
-local function draw_bar(time)
-    monitor.setBackgroundColour(colours.lightGrey)
-    monitor.setTextColour(colours.black)
+    screen.setBackgroundColour(colours.lightGrey)
+    screen.setTextColour(colours.black)
 
-    monitor.setCursorPos(1, 1)
-    monitor.write(string.rep(" ", w))
+    screen.setCursorPos(1, 1)
+    screen.write(string.rep(" ", w))
 
-    monitor.setCursorPos(2, 1)
-    monitor.write("Manifest")
+    screen.setCursorPos(2, 1)
+    screen.write("Manifest")
 
-    monitor.setCursorPos(w - #time, 1)
-    monitor.write(time)
+    screen.setCursorPos(w - #time, 1)
+    screen.write(time)
+end
+
+-- All placeholders until there is a scanner to report on
+local function draw_debug(time)
+    local w = term.getSize()
+    local rows = {
+        { "Monitor", monitor and "connected" or "none" },
+        { "Uptime", math.floor(os.clock()) .. "s" },
+        { "World time", time },
+        { "Chests", "0" },
+        { "Items", "0" },
+        { "Last scan", "never" },
+    }
+
+    term.setBackgroundColour(colours.black)
+    for i, row in ipairs(rows) do
+        local label, value = row[1], row[2]
+        local y = i + 2
+
+        term.setCursorPos(2, y)
+        term.setTextColour(colours.lightGrey)
+        term.write(label)
+
+        term.setCursorPos(14, y)
+        term.setTextColour(colours.white)
+        term.write(value .. string.rep(" ", w - 13 - #value))
+    end
+end
+
+clear(term)
+term.setCursorBlink(false)
+if monitor then
+    clear(monitor)
 end
 
 local last
 while true do
     local now = textutils.formatTime(os.time(), true)
-    if now ~= last then
-        draw_bar(now)
+
+    if monitor and now ~= last then
+        draw_bar(monitor, now)
         last = now
     end
+
+    draw_bar(term, now)
+    draw_debug(now)
+
     sleep(0.5)
 end

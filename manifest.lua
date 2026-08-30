@@ -1,6 +1,6 @@
-local monitor = peripheral.find("monitoritor")
+local monitor = peripheral.find("monitor")
 if not monitor then
-    print("No monitoritor attached.")
+    print("No monitor attached.")
     return
 end
 

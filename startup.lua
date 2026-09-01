@@ -17,10 +17,24 @@ local function format_name(id)
     end))
 end
 
+-- hasType only exists on CC:Tweaked 1.99+, so fall back to probing for the
+-- method on older versions rather than crashing
+local function is_inventory(name)
+    if peripheral.hasType then
+        return peripheral.hasType(name, "inventory")
+    end
+    for _, method in ipairs(peripheral.getMethods(name) or {}) do
+        if method == "list" then
+            return true
+        end
+    end
+    return false
+end
+
 local function storage()
     local found = {}
     for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.hasType(name, "inventory") then
+        if is_inventory(name) then
             found[#found + 1] = name
         end
     end
@@ -122,6 +136,35 @@ local function draw_debug(rows)
     end
 end
 
+-- Every attached peripheral and whether we count it as storage, so an empty
+-- item list can be told apart from nothing being detected in the first place
+local function draw_peripherals(top)
+    local w, h = term.getSize()
+    local y = top
+
+    term.setCursorPos(2, y)
+    term.setTextColour(colours.lightGrey)
+    term.write("Peripherals" .. string.rep(" ", w - 12))
+    y = y + 1
+
+    for _, name in ipairs(peripheral.getNames()) do
+        if y > h then break end
+        local storage_peripheral = is_inventory(name)
+        local text = (storage_peripheral and "+ " or "- ") .. name .. " (" .. peripheral.getType(name) .. ")"
+
+        term.setCursorPos(2, y)
+        term.setTextColour(storage_peripheral and colours.white or colours.grey)
+        term.write(text:sub(1, w - 2) .. string.rep(" ", math.max(0, w - 1 - #text)))
+        y = y + 1
+    end
+
+    for blank = y, h do
+        term.setCursorPos(1, blank)
+        term.setBackgroundColour(colours.black)
+        term.write(string.rep(" ", w))
+    end
+end
+
 clear(term)
 term.setCursorBlink(false)
 if monitor then
@@ -157,6 +200,7 @@ while true do
         { "Total items", commas(total) },
         { "Scan", elapsed .. "ms" },
     })
+    draw_peripherals(11)
 
     sleep(0.5)
 end

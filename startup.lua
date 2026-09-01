@@ -2,14 +2,18 @@ local monitor = peripheral.find("monitor")
 local monitor_name = monitor and peripheral.getName(monitor)
 if monitor then
     monitor.setTextScale(1)
+    -- default green is muddy and lime is neon, so sit the highlight between them
+    monitor.setPaletteColour(colours.green, 0x6ABE5C)
 end
 
+local LIST_TOP = 3
 local PAGER_BUTTON = 11
 local PAGER_GAP = 6
 local PAGER_PAD = 3
 
 local items = {}
 local page = 1
+local selected = nil
 local stats = { chests = "0/0", elapsed = 0 }
 local pager = { y = 1, prev_x = 1, next_x = 1 }
 
@@ -127,18 +131,21 @@ local function draw_list()
 
     for i = 1, rows do
         local item = items[offset + i]
-        monitor.setCursorPos(1, i + 2)
+        monitor.setCursorPos(1, LIST_TOP + i - 1)
 
         if item then
             local count = commas(item.count)
             local name = item.name:sub(1, w - 4 - #count)
             local gap = w - 4 - #name - #count
+            local highlighted = item.name == selected
 
-            monitor.setTextColour(colours.white)
+            monitor.setBackgroundColour(highlighted and colours.green or colours.black)
+            monitor.setTextColour(highlighted and colours.black or colours.white)
             monitor.write("  " .. name .. string.rep(" ", gap))
-            monitor.setTextColour(colours.lightGrey)
+            monitor.setTextColour(highlighted and colours.black or colours.lightGrey)
             monitor.write(count .. "  ")
         else
+            monitor.setBackgroundColour(colours.black)
             monitor.write(string.rep(" ", w))
         end
     end
@@ -266,6 +273,7 @@ local function scan_loop()
             { "Total items", commas(total) },
             { "Scan", stats.elapsed .. "ms" },
             { "Page", page .. "/" .. page_count() },
+            { "Selected", selected or "-" },
         })
         draw_peripherals(12)
 
@@ -277,16 +285,28 @@ local function input_loop()
     while true do
         local _, side, x, y = os.pullEvent("monitor_touch")
 
-        if side == monitor_name and y == pager.y then
-            local pages = page_count()
+        if side == monitor_name then
+            local rows = per_page()
 
-            if x >= pager.prev_x and x < pager.prev_x + PAGER_BUTTON and page > 1 then
-                page = page - 1
-            elseif x >= pager.next_x and x < pager.next_x + PAGER_BUTTON and page < pages then
-                page = page + 1
+            if y == pager.y then
+                local pages = page_count()
+
+                if x >= pager.prev_x and x < pager.prev_x + PAGER_BUTTON and page > 1 then
+                    page = page - 1
+                elseif x >= pager.next_x and x < pager.next_x + PAGER_BUTTON and page < pages then
+                    page = page + 1
+                end
+
+                redraw(textutils.formatTime(os.time(), true))
+            elseif y >= LIST_TOP and y < LIST_TOP + rows then
+                local item = items[(page - 1) * rows + (y - LIST_TOP + 1)]
+
+                if item then
+                    -- tapping the highlighted row again clears it
+                    selected = selected ~= item.name and item.name or nil
+                    redraw(textutils.formatTime(os.time(), true))
+                end
             end
-
-            redraw(textutils.formatTime(os.time(), true))
         end
     end
 end

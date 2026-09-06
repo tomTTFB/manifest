@@ -781,8 +781,6 @@ end
 -- concerned, which is why pulling a cell back out of it quietly does nothing.
 local PORT_IN, PORT_OUT = 1, 2
 
--- Cell names come from the item id rather than getItemDetail, which is far too
--- slow to call on every redraw.
 local function port_slots(name)
     local ok, slots = pcall(peripheral.call, name, "list")
     if not ok or not slots then return nil end
@@ -841,6 +839,16 @@ local function unload_cell(port)
     pulse()
 end
 
+-- a cell put in by hand through the AE2 screen is waiting in the input slot
+-- with nothing to press, so the input row gets a pulse of its own
+local function trigger_port(port)
+    local slots = port_slots(port)
+    if not slots then return "port unreadable" end
+    if not slots[PORT_IN] then return "no cell waiting" end
+
+    pulse()
+end
+
 local function store_cell(port)
     if not barrel then return "no cell barrel set" end
 
@@ -853,6 +861,9 @@ local function store_cell(port)
     end
 end
 
+-- Names come from the item id. getItemDetail gives the real "128 Spatial
+-- Storage Cell" but is far too slow to call on every redraw. TODO: cache it by
+-- nbt hash, which would also tell a loaded cell from an empty one.
 local function barrel_cells()
     local ok, slots = pcall(peripheral.call, barrel, "list")
     if not ok or not slots then return nil end
@@ -1000,7 +1011,9 @@ local function draw_spatial()
                     { label = "in", item = port.waiting },
                     { label = "out", item = port.done },
                 }) do
-                    local limit = (row.label == "out" and port.done) and unload_x - 10 or w - 10
+                    local finished = row.label == "out"
+                    local leftmost = row.item and (finished and unload_x or store_x)
+                    local limit = leftmost and leftmost - 10 or w - 10
 
                     monitor.setBackgroundColour(colours.black)
                     monitor.setCursorPos(4, y)
@@ -1011,20 +1024,22 @@ local function draw_spatial()
                     monitor.setTextColour(row.item and colours.white or colours.grey)
                     monitor.write((row.item and format_name(row.item.name) or "empty"):sub(1, limit))
 
+                    -- the buttons act on the cell beside them, so they sit on its row
+                    if row.item and finished then
+                        controls[#controls + 1] = { x = unload_x, y = y, w = ui.unload_button, h = 1,
+                            kind = "unload", value = port.name }
+                        draw_button(unload_x, y, ui.unload_button, "unload", colours.grey, colours.white, 1)
+
+                        controls[#controls + 1] = { x = store_x, y = y, w = ui.store_button, h = 1,
+                            kind = "store", value = port.name }
+                        draw_button(store_x, y, ui.store_button, "store", colours.grey, colours.white, 1)
+                    elseif row.item then
+                        controls[#controls + 1] = { x = store_x, y = y, w = ui.store_button, h = 1,
+                            kind = "trigger", value = port.name }
+                        draw_button(store_x, y, ui.store_button, "pulse", colours.grey, colours.white, 1)
+                    end
+
                     y = y + 1
-                end
-
-                -- both buttons act on the finished cell, so they live on its row
-                if port.done then
-                    local row_y = y - 1
-
-                    controls[#controls + 1] = { x = unload_x, y = row_y, w = ui.unload_button, h = 1,
-                        kind = "unload", value = port.name }
-                    draw_button(unload_x, row_y, ui.unload_button, "unload", colours.grey, colours.white, 1)
-
-                    controls[#controls + 1] = { x = store_x, y = row_y, w = ui.store_button, h = 1,
-                        kind = "store", value = port.name }
-                    draw_button(store_x, row_y, ui.store_button, "store", colours.grey, colours.white, 1)
                 end
 
                 y = y + 1
@@ -1150,6 +1165,13 @@ local function draw_settings()
     draw_options(scale_y, "Text scale", SCALES, scale, "scale", "")
     draw_options(interval_y, "Scan every", INTERVALS, interval, "interval", "s")
 end
+
+local ACTIONS = {
+    load = { run = load_cell, label = "load", width = "load_button" },
+    unload = { run = unload_cell, label = "unload", width = "unload_button" },
+    store = { run = store_cell, label = "store", width = "store_button" },
+    trigger = { run = trigger_port, label = "pulse", width = "store_button" },
+}
 
 local function control_at(x, y)
     for _, control in ipairs(controls) do
@@ -1453,16 +1475,14 @@ local function input_loop()
                         barrel_picking = false
                     elseif control.kind == "change" then
                         barrel_picking = true
-                    elseif control.kind == "load" or control.kind == "unload"
-                        or control.kind == "store" then
-                        local widths = { load = ui.load_button, unload = ui.unload_button,
-                            store = ui.store_button }
-                        draw_button(control.x, control.y, widths[control.kind], control.kind,
+                    elseif ACTIONS[control.kind] then
+                        local action = ACTIONS[control.kind]
+
+                        draw_button(control.x, control.y, ui[action.width], action.label,
                             colours.white, colours.grey)
                         sleep(0.08)
 
-                        local actions = { load = load_cell, unload = unload_cell, store = store_cell }
-                        local failure = actions[control.kind](control.value)
+                        local failure = action.run(control.value)
 
                         error_toast = failure and { text = failure, expires = os.clock() + 3 } or nil
                     elseif control.kind == "pulse" then

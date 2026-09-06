@@ -52,6 +52,7 @@ local amount = 1
 local output = nil
 local barrel = nil
 local pulse_side = "back"
+local relay = nil
 local status = nil
 local error_toast = nil
 local stats = { chests = "0/0", elapsed = 0 }
@@ -102,6 +103,7 @@ local function load_config()
         interval = tonumber(body:match("interval=([^\r\n]+)")),
         barrel = body:match("barrel=([^\r\n]+)"),
         pulse = body:match("pulse=([^\r\n]+)"),
+        relay = body:match("relay=([^\r\n]+)"),
     }
 end
 
@@ -112,12 +114,22 @@ local function save_config()
     f.write("interval=" .. interval .. "\n")
     f.write("barrel=" .. (barrel or "") .. "\n")
     f.write("pulse=" .. pulse_side .. "\n")
+    f.write("relay=" .. (relay or "") .. "\n")
     f.close()
 end
 
 -- AE2 hands its blocks to CC as generic inventories, so a spatial IO port looks
 -- like any other chest. Pulling someone's stored dimension out of one because it
 -- counted as storage would be a bad afternoon.
+local function is_relay(name)
+    for _, method in ipairs(peripheral.getMethods(name) or {}) do
+        if method == "setOutput" then
+            return true
+        end
+    end
+    return false
+end
+
 local function is_spatial(name)
     return peripheral.getType(name):find("spatial") ~= nil
 end
@@ -787,10 +799,41 @@ local function port_slots(name)
     return slots
 end
 
+-- A relay sits against the port and is driven over the wired network, so every
+-- one of its sides goes high; the computer can only ever reach what it touches,
+-- so there the side has to be picked.
 local function pulse()
-    redstone.setOutput(pulse_side, true)
-    sleep(0.2)
-    redstone.setOutput(pulse_side, false)
+    if not relay then
+        redstone.setOutput(pulse_side, true)
+        sleep(0.5)
+        redstone.setOutput(pulse_side, false)
+        return
+    end
+
+    if not peripheral.isPresent(relay) then return "relay is gone" end
+
+    for _, side in ipairs(SIDE_ORDER) do
+        peripheral.call(relay, "setOutput", side, true)
+    end
+
+    sleep(0.5)
+
+    for _, side in ipairs(SIDE_ORDER) do
+        peripheral.call(relay, "setOutput", side, false)
+    end
+end
+
+local function relays()
+    local found = {}
+
+    for _, name in ipairs(peripheral.getNames()) do
+        if is_relay(name) then
+            found[#found + 1] = name
+        end
+    end
+
+    table.sort(found)
+    return found
 end
 
 -- One pulse does whichever transfer the cell in the input slot calls for: an
@@ -807,7 +850,7 @@ local function load_cell(slot)
         return "could not move the cell"
     end
 
-    pulse()
+    return pulse()
 end
 
 local function unload_cell(port)
@@ -836,7 +879,7 @@ local function unload_cell(port)
         peripheral.call(barrel, "pushItems", port, landed, 1, PORT_IN)
     end
 
-    pulse()
+    return pulse()
 end
 
 -- a cell put in by hand through the AE2 screen is waiting in the input slot
@@ -846,7 +889,7 @@ local function trigger_port(port)
     if not slots then return "port unreadable" end
     if not slots[PORT_IN] then return "no cell waiting" end
 
-    pulse()
+    return pulse()
 end
 
 local function store_cell(port)
@@ -911,15 +954,26 @@ local function spatial_view()
 end
 
 local function draw_pulse_row(ui, y)
-    local width = 8 * ui.u
+    local target = relay and (relay:gsub("^redstone_", "")):sub(1, 10) or "computer"
+    local width = #target + 2 * ui.u
+    local x = ui.option_x
 
     monitor.setBackgroundColour(colours.black)
     monitor.setCursorPos(2, y + ui.mid)
     monitor.setTextColour(colours.lightGrey)
-    monitor.write("Pulse side")
+    monitor.write("Pulse")
 
-    controls[#controls + 1] = { x = ui.option_x, y = y, w = width, h = ui.box, kind = "pulse" }
-    draw_button(ui.option_x, y, width, pulse_side, colours.green, colours.black, ui.box)
+    controls[#controls + 1] = { x = x, y = y, w = width, h = ui.box, kind = "target" }
+    draw_button(x, y, width, target, colours.green, colours.black, ui.box)
+
+    -- a relay gets every side, so the side only means anything for the computer
+    if not relay then
+        x = x + width + ui.u
+        width = 8 * ui.u
+
+        controls[#controls + 1] = { x = x, y = y, w = width, h = ui.box, kind = "pulse" }
+        draw_button(x, y, width, pulse_side, colours.green, colours.black, ui.box)
+    end
 end
 
 local function draw_barrel_picker(ui, y, bottom, found)
@@ -1491,11 +1545,25 @@ local function input_loop()
                             if name == pulse_side then at = i end
                         end
                         pulse_side = SIDE_ORDER[at % #SIDE_ORDER + 1]
+                    elseif control.kind == "target" then
+                        -- the computer itself leads, then whatever relays are out there
+                        local choices = { false }
+                        for _, name in ipairs(relays()) do
+                            choices[#choices + 1] = name
+                        end
+
+                        local at = 1
+                        for i, name in ipairs(choices) do
+                            if name == relay then at = i end
+                        end
+
+                        relay = choices[at % #choices + 1] or nil
                     else
                         barrel_offset = barrel_offset + control.value
                     end
 
-                    if control.kind == "barrel" or control.kind == "pulse" then
+                    if control.kind == "barrel" or control.kind == "pulse"
+                        or control.kind == "target" then
                         save_config()
                     end
 
@@ -1534,6 +1602,7 @@ scale = config.scale or scale
 interval = config.interval or interval
 barrel = config.barrel
 pulse_side = config.pulse or pulse_side
+relay = config.relay
 
 if not (output and peripheral.isPresent(output)) then
     shell.run("config")

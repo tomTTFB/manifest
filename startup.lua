@@ -35,6 +35,7 @@ local tab = 1
 local tabs = {}
 local controls = {}
 local output_offset = 0
+local barrel_offset = 0
 local scale = 1
 local interval = 0.5
 local query = ""
@@ -44,6 +45,8 @@ local page = 1
 local selected = nil
 local amount = 1
 local output = nil
+local barrel = nil
+local pulse_side = "back"
 local status = nil
 local error_toast = nil
 local stats = { chests = "0/0", elapsed = 0 }
@@ -79,6 +82,7 @@ local function is_inventory(name)
 end
 
 local SIDES = { top = true, bottom = true, left = true, right = true, front = true, back = true }
+local SIDE_ORDER = { "top", "bottom", "left", "right", "front", "back" }
 
 local function load_config()
     if not fs.exists(CONFIG) then return {} end
@@ -91,6 +95,8 @@ local function load_config()
         output = body:match("output=([^\r\n]+)"),
         scale = tonumber(body:match("scale=([^\r\n]+)")),
         interval = tonumber(body:match("interval=([^\r\n]+)")),
+        barrel = body:match("barrel=([^\r\n]+)"),
+        pulse = body:match("pulse=([^\r\n]+)"),
     }
 end
 
@@ -99,6 +105,8 @@ local function save_config()
     f.write("output=" .. (output or "") .. "\n")
     f.write("scale=" .. scale .. "\n")
     f.write("interval=" .. interval .. "\n")
+    f.write("barrel=" .. (barrel or "") .. "\n")
+    f.write("pulse=" .. pulse_side .. "\n")
     f.close()
 end
 
@@ -116,7 +124,7 @@ local function storage()
     for _, name in ipairs(peripheral.getNames()) do
         -- a side-attached inventory is off the wired network, so it could never
         -- push to a networked output; counting it promises stock we cannot move
-        if is_inventory(name) and name ~= output and not is_spatial(name)
+        if is_inventory(name) and name ~= output and name ~= barrel and not is_spatial(name)
             and not (networked and SIDES[name]) then
             found[#found + 1] = name
         end
@@ -759,65 +767,110 @@ local function spatial_ports()
     return found
 end
 
--- Reports what is sitting in each port; nothing here writes to one. Cell names
+-- Reports what each port is holding; nothing here writes to one yet. Cell names
 -- come from the item id rather than getItemDetail, which is far too slow to call
 -- on every redraw.
+local function port_cell(name)
+    local ok, slots = pcall(peripheral.call, name, "list")
+    if not ok or not slots then return nil, "unreadable" end
+
+    for _, item in pairs(slots) do
+        return item
+    end
+end
+
 local function draw_spatial()
     local ui = layout()
     local w, h = ui.w, ui.h
     local ports = spatial_ports()
+    local pulse_y = h - ui.box
     local y = ui.box + 2
 
+    controls = {}
     clear_body()
 
     monitor.setCursorPos(2, y)
     monitor.setTextColour(colours.lightGrey)
-    monitor.write("Spatial storage")
-    y = y + 2
+    monitor.write("Spatial IO")
+    y = y + 1
 
     if #ports == 0 then
         monitor.setCursorPos(2, y)
         monitor.setTextColour(colours.grey)
-        monitor.write("No spatial IO ports on the network.")
-        monitor.setCursorPos(2, y + 1)
-        monitor.write("Attach one with a wired modem.")
-        return
-    end
+        monitor.write("No ports on the network")
+        y = y + 2
+    else
+        for _, name in ipairs(ports) do
+            if y >= pulse_y - 2 then break end
 
-    for _, name in ipairs(ports) do
-        if y > h - 1 then break end
+            local item, failure = port_cell(name)
+            local text = name:sub(1, w - 16)
+            local status_text = failure or (item and format_name(item.name) or "empty")
 
-        monitor.setCursorPos(2, y)
-        monitor.setTextColour(colours.white)
-        monitor.write(name:sub(1, w - 2))
-        y = y + 1
-
-        local ok, slots = pcall(peripheral.call, name, "list")
-
-        if not ok or not slots then
-            monitor.setCursorPos(4, y)
-            monitor.setTextColour(colours.red)
-            monitor.write("unreadable")
-            y = y + 2
-        elseif next(slots) == nil then
-            monitor.setCursorPos(4, y)
-            monitor.setTextColour(colours.grey)
-            monitor.write("empty")
-            y = y + 2
-        else
-            for slot, item in pairs(slots) do
-                if y > h - 1 then break end
-
-                monitor.setCursorPos(4, y)
-                monitor.setTextColour(colours.lightGrey)
-                monitor.write("slot " .. slot .. "  ")
-                monitor.setTextColour(colours.white)
-                monitor.write(format_name(item.name):sub(1, w - 12))
-                y = y + 1
-            end
+            monitor.setCursorPos(2, y)
+            monitor.setTextColour(colours.white)
+            monitor.write(text)
+            monitor.setTextColour(failure and colours.red or colours.grey)
+            monitor.write("  " .. status_text:sub(1, w - 4 - #text))
             y = y + 1
         end
+        y = y + 1
     end
+
+    monitor.setCursorPos(2, y)
+    monitor.setTextColour(colours.lightGrey)
+    monitor.write("Cell barrel")
+    y = y + 1
+
+    local found = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        -- the output is where requested items land, so it is never the barrel
+        if is_inventory(name) and not is_spatial(name) and name ~= output then
+            found[#found + 1] = name
+        end
+    end
+    table.sort(found)
+
+    local room = math.max(1, pulse_y - y - 1)
+    local rows = #found > room and math.max(1, room - ui.box) or room
+
+    if barrel_offset >= #found then
+        barrel_offset = 0
+    end
+
+    for i = 1, rows do
+        local name = found[barrel_offset + i]
+        if not name then break end
+
+        local row_y = y + i - 1
+        local chosen = name == barrel
+        local text = name:sub(1, w - 4)
+
+        controls[#controls + 1] = { x = 2, y = row_y, w = w - 2, h = 1, kind = "barrel", value = name }
+
+        monitor.setCursorPos(2, row_y)
+        monitor.setBackgroundColour(chosen and colours.green or colours.black)
+        monitor.setTextColour(chosen and colours.black or colours.white)
+        monitor.write(" " .. text .. string.rep(" ", w - 4 - #text) .. " ")
+    end
+
+    if #found > rows then
+        local more_y = y + rows
+
+        controls[#controls + 1] = { x = 2, y = more_y, w = ui.more_button, h = ui.box,
+            kind = "barrel_more", value = rows }
+        draw_button(2, more_y, ui.more_button, "more", colours.grey, colours.white, ui.box)
+    end
+
+    local width = 8 * ui.u
+
+    monitor.setBackgroundColour(colours.black)
+    monitor.setCursorPos(2, pulse_y + ui.mid)
+    monitor.setTextColour(colours.lightGrey)
+    monitor.write("Pulse side")
+
+    controls[#controls + 1] = { x = ui.option_x, y = pulse_y, w = width, h = ui.box, kind = "pulse" }
+    draw_button(ui.option_x, pulse_y, width, pulse_side, colours.green, colours.black, ui.box)
 end
 
 local function draw_options(y, label, values, current, kind, suffix)
@@ -1187,6 +1240,28 @@ local function input_loop()
 
                     redraw(textutils.formatTime(os.time(), true))
                 end
+            elseif tab == 2 then
+                local control = control_at(x, y)
+
+                if control then
+                    if control.kind == "barrel" then
+                        barrel = control.value
+                    elseif control.kind == "pulse" then
+                        local at = 1
+                        for i, name in ipairs(SIDE_ORDER) do
+                            if name == pulse_side then at = i end
+                        end
+                        pulse_side = SIDE_ORDER[at % #SIDE_ORDER + 1]
+                    else
+                        barrel_offset = barrel_offset + control.value
+                    end
+
+                    if control.kind ~= "barrel_more" then
+                        save_config()
+                    end
+
+                    redraw(textutils.formatTime(os.time(), true))
+                end
             elseif tab == 3 then
                 local control = control_at(x, y)
 
@@ -1218,6 +1293,8 @@ local config = load_config()
 output = config.output
 scale = config.scale or scale
 interval = config.interval or interval
+barrel = config.barrel
+pulse_side = config.pulse or pulse_side
 
 if not (output and peripheral.isPresent(output)) then
     shell.run("config")

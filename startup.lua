@@ -842,6 +842,34 @@ local function barrel_cells()
     return found
 end
 
+-- Every peripheral read the tab needs, collected before a single character is
+-- painted. Calls over a wired modem yield, and yielding after the body has been
+-- wiped leaves the blank frame on screen long enough to flicker.
+local function spatial_view()
+    local ports = {}
+
+    for _, name in ipairs(spatial_ports()) do
+        local item, slot, failure = port_cell(name)
+        ports[#ports + 1] = { name = name, item = item, slot = slot, failure = failure }
+    end
+
+    local inventories = {}
+
+    for _, name in ipairs(peripheral.getNames()) do
+        -- the output is where requested items land, so it is never the barrel
+        if is_inventory(name) and not is_spatial(name) and name ~= output then
+            inventories[#inventories + 1] = name
+        end
+    end
+    table.sort(inventories)
+
+    return {
+        ports = ports,
+        inventories = inventories,
+        cells = barrel and barrel_cells() or nil,
+    }
+end
+
 local function draw_pulse_row(ui, y)
     local width = 8 * ui.u
 
@@ -854,22 +882,13 @@ local function draw_pulse_row(ui, y)
     draw_button(ui.option_x, y, width, pulse_side, colours.green, colours.black, ui.box)
 end
 
-local function draw_barrel_picker(ui, y, bottom)
+local function draw_barrel_picker(ui, y, bottom, found)
     local w = ui.w
-    local found = {}
 
     monitor.setCursorPos(2, y)
     monitor.setTextColour(colours.lightGrey)
     monitor.write("Where do the cells live?")
     y = y + 1
-
-    for _, name in ipairs(peripheral.getNames()) do
-        -- the output is where requested items land, so it is never the barrel
-        if is_inventory(name) and not is_spatial(name) and name ~= output then
-            found[#found + 1] = name
-        end
-    end
-    table.sort(found)
 
     local room = math.max(1, bottom - y)
     local rows = #found > room and math.max(1, room - ui.box) or room
@@ -904,6 +923,7 @@ local function draw_barrel_picker(ui, y, bottom)
 end
 
 local function draw_spatial()
+    local view = spatial_view()
     local ui = layout()
     local w, h = ui.w, ui.h
     local pulse_y = h - ui.box
@@ -913,32 +933,30 @@ local function draw_spatial()
     clear_body()
 
     if barrel_picking or not barrel then
-        draw_barrel_picker(ui, y, pulse_y - 1)
+        draw_barrel_picker(ui, y, pulse_y - 1, view.inventories)
         draw_pulse_row(ui, pulse_y)
         return
     end
-
-    local ports = spatial_ports()
 
     monitor.setCursorPos(2, y)
     monitor.setTextColour(colours.lightGrey)
     monitor.write("Spatial IO")
     y = y + 1
 
-    if #ports == 0 then
+    if #view.ports == 0 then
         monitor.setCursorPos(2, y)
         monitor.setTextColour(colours.grey)
         monitor.write("No ports on the network")
         y = y + 2
     else
-        for _, name in ipairs(ports) do
+        for _, port in ipairs(view.ports) do
             if y >= pulse_y - 1 then break end
 
-            local item, _, failure = port_cell(name)
+            local item, failure = port.item, port.failure
             local button_x = w - ui.unload_button
             local room = button_x - 3
             local held = failure or (item and format_name(item.name) or "empty")
-            local text = name:sub(1, math.max(1, room - #held - 2))
+            local text = port.name:sub(1, math.max(1, room - #held - 2))
 
             monitor.setBackgroundColour(colours.black)
             monitor.setCursorPos(2, y)
@@ -949,7 +967,7 @@ local function draw_spatial()
 
             if item then
                 controls[#controls + 1] = { x = button_x, y = y, w = ui.unload_button, h = 1,
-                    kind = "unload", value = name }
+                    kind = "unload", value = port.name }
                 draw_button(button_x, y, ui.unload_button, "unload", colours.grey, colours.white, 1)
             end
 
@@ -969,7 +987,7 @@ local function draw_spatial()
     draw_button(change_x, y, ui.change_button, "change", colours.black, colours.grey, 1)
     y = y + 1
 
-    local cells = barrel_cells()
+    local cells = view.cells
     local room = math.max(1, pulse_y - y - 1)
 
     if not cells then
@@ -1032,15 +1050,15 @@ local function draw_settings()
     local rows = scale_y - top - 2
     local found = {}
 
-    controls = {}
-    clear_body()
-
     for _, name in ipairs(peripheral.getNames()) do
         if is_inventory(name) and not is_spatial(name) then
             found[#found + 1] = name
         end
     end
     table.sort(found)
+
+    controls = {}
+    clear_body()
 
     if output_offset >= #found then
         output_offset = 0

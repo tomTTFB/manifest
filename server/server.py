@@ -29,5 +29,10 @@ def lua(name):
     src = path.read_text().replace("__BASE__", request.host_url.rstrip("/"))
     return Response(src, mimetype="text/plain")
 
+@app.post("/report")
+def report():
+    HERE.joinpath("report.txt").write_bytes(request.get_data())
+    return "ok\n"
+
 
 app.run(host="0.0.0.0", port=8080)

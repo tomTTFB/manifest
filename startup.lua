@@ -21,7 +21,6 @@ local QTY_MIN = 3
 local REQUEST_BUTTON = 9
 local CLEAR_BUTTON = 7
 local LOAD_BUTTON = 6
-local UNLOAD_BUTTON = 8
 local STORE_BUTTON = 7
 local CHANGE_BUTTON = 8
 
@@ -53,6 +52,7 @@ local output = nil
 local barrel = nil
 local pulse_side = "back"
 local relay = nil
+local cell_names = {}
 local status = nil
 local error_toast = nil
 local stats = { chests = "0/0", elapsed = 0 }
@@ -280,7 +280,6 @@ local function layout()
         clear_button = CLEAR_BUTTON * u,
         more_button = MORE_BUTTON * u,
         load_button = LOAD_BUTTON * u,
-        unload_button = UNLOAD_BUTTON * u,
         store_button = STORE_BUTTON * u,
         change_button = CHANGE_BUTTON * u,
         option_x = OPTION_X * u,
@@ -836,54 +835,61 @@ local function relays()
     return found
 end
 
--- One pulse does whichever transfer the cell in the input slot calls for: an
--- empty cell captures the region, a loaded one puts it back.
-local function load_cell(slot)
+-- getItemDetail is far too slow to call on every redraw, but a cell only needs
+-- looking up once per state: the nbt hash changes when its contents do. Anvil
+-- names come through here, which is the only way to tell two cells apart.
+local function cell_label(inv, slot, item)
+    local key = item.nbt or item.name
+    local known = cell_names[key]
+    if known then return known end
+
+    local ok, detail = pcall(peripheral.call, inv, "getItemDetail", slot)
+    local label = ok and detail and detail.displayName or format_name(item.name)
+
+    -- displayName carries a superscript 3 the terminal font has no glyph for
+    label = label:gsub("[\128-\255]", "")
+    cell_names[key] = label
+
+    return label
+end
+
+-- One pulse does whichever transfer the cell calls for: an empty cell captures
+-- the region, a loaded one puts it back. So there is only ever one thing to do
+-- to a cell, and the port is left empty afterwards rather than holding onto it.
+local function use_cell(slot)
     local port = spatial_ports()[1]
     if not port then return "no spatial IO port" end
 
     local slots = port_slots(port)
     if not slots then return "port unreadable" end
     if slots[PORT_IN] then return "port is busy" end
+    if slots[PORT_OUT] then return "clear the port first" end
 
     if peripheral.call(barrel, "pushItems", port, slot, 1, PORT_IN) == 0 then
         return "could not move the cell"
     end
 
-    return pulse()
-end
+    local failure = pulse()
+    if failure then return failure end
 
-local function unload_cell(port)
-    local slots = port_slots(port)
-    if not slots then return "port unreadable" end
-    if not slots[PORT_OUT] then return "nothing to unload" end
-    if slots[PORT_IN] then return "port is busy" end
+    -- the transfer is not instant, so wait for the cell to come out the far side
+    for _ = 1, 20 do
+        sleep(0.25)
 
-    -- straight across inside the port where the network allows it; some setups
-    -- refuse a peripheral pushing to itself, so fall back through the barrel
-    if peripheral.call(port, "pushItems", port, PORT_OUT, 1, PORT_IN) == 0 then
-        if not barrel then return "could not move the cell" end
-
-        local before = peripheral.call(barrel, "list")
-        if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1) == 0 then
-            return "could not move the cell"
+        local now = port_slots(port)
+        if now and now[PORT_OUT] then
+            if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1) == 0 then
+                return "barrel is full"
+            end
+            return
         end
-
-        -- cells do not stack, so the cell is whichever slot the barrel gained
-        local landed
-        for s in pairs(peripheral.call(barrel, "list")) do
-            if not before[s] then landed = s end
-        end
-
-        if not landed then return "lost track of the cell" end
-        peripheral.call(barrel, "pushItems", port, landed, 1, PORT_IN)
     end
 
-    return pulse()
+    return "transfer did not finish"
 end
 
 -- a cell put in by hand through the AE2 screen is waiting in the input slot
--- with nothing to press, so the input row gets a pulse of its own
+-- with nothing to press, so it gets a pulse of its own
 local function trigger_port(port)
     local slots = port_slots(port)
     if not slots then return "port unreadable" end
@@ -892,7 +898,7 @@ local function trigger_port(port)
     return pulse()
 end
 
-local function store_cell(port)
+local function clear_port(port)
     if not barrel then return "no cell barrel set" end
 
     local slots = port_slots(port)
@@ -913,7 +919,7 @@ local function barrel_cells()
 
     local found = {}
     for slot, item in pairs(slots) do
-        found[#found + 1] = { slot = slot, label = format_name(item.name) }
+        found[#found + 1] = { slot = slot, label = cell_label(barrel, slot, item) }
     end
 
     table.sort(found, function(a, b) return a.slot < b.slot end)
@@ -928,12 +934,17 @@ local function spatial_view()
 
     for _, name in ipairs(spatial_ports()) do
         local slots = port_slots(name)
-        ports[#ports + 1] = {
-            name = name,
-            waiting = slots and slots[PORT_IN],
-            done = slots and slots[PORT_OUT],
-            failure = not slots and "unreadable" or nil,
-        }
+        local state = "ready"
+
+        if not slots then
+            state = "unreadable"
+        elseif slots[PORT_IN] then
+            state = "busy"
+        elseif slots[PORT_OUT] then
+            state = "finished"
+        end
+
+        ports[#ports + 1] = { name = name, state = state }
     end
 
     local inventories = {}
@@ -971,7 +982,7 @@ local function draw_pulse_row(ui, y)
         x = x + width + ui.u
         width = 8 * ui.u
 
-        controls[#controls + 1] = { x = x, y = y, w = width, h = ui.box, kind = "pulse" }
+        controls[#controls + 1] = { x = x, y = y, w = width, h = ui.box, kind = "side" }
         draw_button(x, y, width, pulse_side, colours.green, colours.black, ui.box)
     end
 end
@@ -1044,61 +1055,35 @@ local function draw_spatial()
         y = y + 2
     else
         for _, port in ipairs(view.ports) do
-            if y >= pulse_y - 3 then break end
+            if y >= pulse_y - 1 then break end
+
+            -- normally there is nothing to press here; the buttons are for
+            -- digging out a cell the port held onto
+            local action = (port.state == "finished" and "clear")
+                or (port.state == "busy" and "pulse") or nil
+            local button_x = w - ui.store_button
+            local room = (action and button_x or w) - 3
+            local text = port.name:sub(1, math.max(1, room - #port.state - 2))
 
             monitor.setBackgroundColour(colours.black)
             monitor.setCursorPos(2, y)
             monitor.setTextColour(colours.white)
-            monitor.write(port.name:sub(1, w - 2))
-            y = y + 1
+            monitor.write(text)
 
-            if port.failure then
-                monitor.setCursorPos(4, y)
-                monitor.setTextColour(colours.red)
-                monitor.write(port.failure)
-                y = y + 2
-            else
-                local store_x = w - ui.store_button
-                local unload_x = store_x - 1 - ui.unload_button
+            monitor.setTextColour(port.state == "unreadable" and colours.red
+                or port.state == "ready" and colours.grey or colours.lightGrey)
+            monitor.write(("  " .. port.state):sub(1, room - #text))
 
-                for _, row in ipairs({
-                    { label = "in", item = port.waiting },
-                    { label = "out", item = port.done },
-                }) do
-                    local finished = row.label == "out"
-                    local leftmost = row.item and (finished and unload_x or store_x)
-                    local limit = leftmost and leftmost - 10 or w - 10
-
-                    monitor.setBackgroundColour(colours.black)
-                    monitor.setCursorPos(4, y)
-                    monitor.setTextColour(colours.grey)
-                    monitor.write(row.label)
-
-                    monitor.setCursorPos(9, y)
-                    monitor.setTextColour(row.item and colours.white or colours.grey)
-                    monitor.write((row.item and format_name(row.item.name) or "empty"):sub(1, limit))
-
-                    -- the buttons act on the cell beside them, so they sit on its row
-                    if row.item and finished then
-                        controls[#controls + 1] = { x = unload_x, y = y, w = ui.unload_button, h = 1,
-                            kind = "unload", value = port.name }
-                        draw_button(unload_x, y, ui.unload_button, "unload", colours.grey, colours.white, 1)
-
-                        controls[#controls + 1] = { x = store_x, y = y, w = ui.store_button, h = 1,
-                            kind = "store", value = port.name }
-                        draw_button(store_x, y, ui.store_button, "store", colours.grey, colours.white, 1)
-                    elseif row.item then
-                        controls[#controls + 1] = { x = store_x, y = y, w = ui.store_button, h = 1,
-                            kind = "trigger", value = port.name }
-                        draw_button(store_x, y, ui.store_button, "pulse", colours.grey, colours.white, 1)
-                    end
-
-                    y = y + 1
-                end
-
-                y = y + 1
+            if action then
+                controls[#controls + 1] = { x = button_x, y = y, w = ui.store_button, h = 1,
+                    kind = action, value = port.name }
+                draw_button(button_x, y, ui.store_button, action, colours.grey, colours.white, 1)
             end
+
+            y = y + 1
         end
+
+        y = y + 1
     end
 
     local change_x = w - ui.change_button
@@ -1131,13 +1116,13 @@ local function draw_spatial()
             local text = cell.label:sub(1, button_x - 4)
 
             controls[#controls + 1] = { x = button_x, y = row_y, w = ui.load_button, h = 1,
-                kind = "load", value = cell.slot }
+                kind = "use", value = cell.slot }
 
             monitor.setBackgroundColour(colours.black)
             monitor.setCursorPos(2, row_y)
             monitor.setTextColour(colours.white)
             monitor.write(text)
-            draw_button(button_x, row_y, ui.load_button, "load", colours.grey, colours.white, 1)
+            draw_button(button_x, row_y, ui.load_button, "use", colours.grey, colours.white, 1)
         end
     end
 
@@ -1220,11 +1205,12 @@ local function draw_settings()
     draw_options(interval_y, "Scan every", INTERVALS, interval, "interval", "s")
 end
 
+-- the label on each button is its kind, so a control carries everything the
+-- handler needs to flash it and run it
 local ACTIONS = {
-    load = { run = load_cell, label = "load", width = "load_button" },
-    unload = { run = unload_cell, label = "unload", width = "unload_button" },
-    store = { run = store_cell, label = "store", width = "store_button" },
-    trigger = { run = trigger_port, label = "pulse", width = "store_button" },
+    use = { run = use_cell, width = "load_button" },
+    pulse = { run = trigger_port, width = "store_button" },
+    clear = { run = clear_port, width = "store_button" },
 }
 
 local function control_at(x, y)
@@ -1532,14 +1518,14 @@ local function input_loop()
                     elseif ACTIONS[control.kind] then
                         local action = ACTIONS[control.kind]
 
-                        draw_button(control.x, control.y, ui[action.width], action.label,
+                        draw_button(control.x, control.y, ui[action.width], control.kind,
                             colours.white, colours.grey)
                         sleep(0.08)
 
                         local failure = action.run(control.value)
 
                         error_toast = failure and { text = failure, expires = os.clock() + 3 } or nil
-                    elseif control.kind == "pulse" then
+                    elseif control.kind == "side" then
                         local at = 1
                         for i, name in ipairs(SIDE_ORDER) do
                             if name == pulse_side then at = i end
@@ -1562,7 +1548,7 @@ local function input_loop()
                         barrel_offset = barrel_offset + control.value
                     end
 
-                    if control.kind == "barrel" or control.kind == "pulse"
+                    if control.kind == "barrel" or control.kind == "side"
                         or control.kind == "target" then
                         save_config()
                     end

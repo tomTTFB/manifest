@@ -22,6 +22,7 @@ local REQUEST_BUTTON = 9
 local CLEAR_BUTTON = 7
 local LOAD_BUTTON = 6
 local UNLOAD_BUTTON = 8
+local STORE_BUTTON = 7
 local CHANGE_BUTTON = 8
 
 local KEY_MAX_W = 9
@@ -268,6 +269,7 @@ local function layout()
         more_button = MORE_BUTTON * u,
         load_button = LOAD_BUTTON * u,
         unload_button = UNLOAD_BUTTON * u,
+        store_button = STORE_BUTTON * u,
         change_button = CHANGE_BUTTON * u,
         option_x = OPTION_X * u,
     }
@@ -774,15 +776,17 @@ local function spatial_ports()
     return found
 end
 
+-- The port has two slots. A cell goes into the first, and AE2 moves it into the
+-- second once the transfer finishes. The first is insert-only as far as CC is
+-- concerned, which is why pulling a cell back out of it quietly does nothing.
+local PORT_IN, PORT_OUT = 1, 2
+
 -- Cell names come from the item id rather than getItemDetail, which is far too
 -- slow to call on every redraw.
-local function port_cell(name)
+local function port_slots(name)
     local ok, slots = pcall(peripheral.call, name, "list")
-    if not ok or not slots then return nil, nil, "unreadable" end
-
-    for slot, item in pairs(slots) do
-        return item, slot
-    end
+    if not ok or not slots then return nil end
+    return slots
 end
 
 local function pulse()
@@ -791,15 +795,17 @@ local function pulse()
     redstone.setOutput(pulse_side, false)
 end
 
--- The port toggles on a pulse: an empty cell captures the region, a loaded one
--- puts it back. AE2 only reacts to a cell that has just been inserted, so
--- unloading means taking the cell out and feeding it straight back in.
+-- One pulse does whichever transfer the cell in the input slot calls for: an
+-- empty cell captures the region, a loaded one puts it back.
 local function load_cell(slot)
     local port = spatial_ports()[1]
     if not port then return "no spatial IO port" end
-    if port_cell(port) then return "port already holds a cell" end
 
-    if peripheral.call(barrel, "pushItems", port, slot, 1) == 0 then
+    local slots = port_slots(port)
+    if not slots then return "port unreadable" end
+    if slots[PORT_IN] then return "port is busy" end
+
+    if peripheral.call(barrel, "pushItems", port, slot, 1, PORT_IN) == 0 then
         return "could not move the cell"
     end
 
@@ -807,26 +813,44 @@ local function load_cell(slot)
 end
 
 local function unload_cell(port)
-    local item, slot = port_cell(port)
-    if not item then return "port is empty" end
+    local slots = port_slots(port)
+    if not slots then return "port unreadable" end
+    if not slots[PORT_OUT] then return "nothing to unload" end
+    if slots[PORT_IN] then return "port is busy" end
 
-    local ok, before = pcall(peripheral.call, barrel, "list")
-    if not ok or not before then return "barrel unreadable" end
+    -- straight across inside the port where the network allows it; some setups
+    -- refuse a peripheral pushing to itself, so fall back through the barrel
+    if peripheral.call(port, "pushItems", port, PORT_OUT, 1, PORT_IN) == 0 then
+        if not barrel then return "could not move the cell" end
 
-    if peripheral.call(port, "pushItems", barrel, slot, 1) == 0 then
+        local before = peripheral.call(barrel, "list")
+        if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1) == 0 then
+            return "could not move the cell"
+        end
+
+        -- cells do not stack, so the cell is whichever slot the barrel gained
+        local landed
+        for s in pairs(peripheral.call(barrel, "list")) do
+            if not before[s] then landed = s end
+        end
+
+        if not landed then return "lost track of the cell" end
+        peripheral.call(barrel, "pushItems", port, landed, 1, PORT_IN)
+    end
+
+    pulse()
+end
+
+local function store_cell(port)
+    if not barrel then return "no cell barrel set" end
+
+    local slots = port_slots(port)
+    if not slots then return "port unreadable" end
+    if not slots[PORT_OUT] then return "nothing to put away" end
+
+    if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1) == 0 then
         return "barrel is full"
     end
-
-    -- cells do not stack, so the cell is whichever slot the barrel gained
-    local landed
-    for s in pairs(peripheral.call(barrel, "list")) do
-        if not before[s] then landed = s end
-    end
-
-    if not landed then return "lost track of the cell" end
-
-    peripheral.call(barrel, "pushItems", port, landed, 1)
-    pulse()
 end
 
 local function barrel_cells()
@@ -849,8 +873,13 @@ local function spatial_view()
     local ports = {}
 
     for _, name in ipairs(spatial_ports()) do
-        local item, slot, failure = port_cell(name)
-        ports[#ports + 1] = { name = name, item = item, slot = slot, failure = failure }
+        local slots = port_slots(name)
+        ports[#ports + 1] = {
+            name = name,
+            waiting = slots and slots[PORT_IN],
+            done = slots and slots[PORT_OUT],
+            failure = not slots and "unreadable" or nil,
+        }
     end
 
     local inventories = {}
@@ -950,30 +979,57 @@ local function draw_spatial()
         y = y + 2
     else
         for _, port in ipairs(view.ports) do
-            if y >= pulse_y - 1 then break end
-
-            local item, failure = port.item, port.failure
-            local button_x = w - ui.unload_button
-            local room = button_x - 3
-            local held = failure or (item and format_name(item.name) or "empty")
-            local text = port.name:sub(1, math.max(1, room - #held - 2))
+            if y >= pulse_y - 3 then break end
 
             monitor.setBackgroundColour(colours.black)
             monitor.setCursorPos(2, y)
             monitor.setTextColour(colours.white)
-            monitor.write(text)
-            monitor.setTextColour(failure and colours.red or colours.grey)
-            monitor.write(("  " .. held):sub(1, room - #text))
-
-            if item then
-                controls[#controls + 1] = { x = button_x, y = y, w = ui.unload_button, h = 1,
-                    kind = "unload", value = port.name }
-                draw_button(button_x, y, ui.unload_button, "unload", colours.grey, colours.white, 1)
-            end
-
+            monitor.write(port.name:sub(1, w - 2))
             y = y + 1
+
+            if port.failure then
+                monitor.setCursorPos(4, y)
+                monitor.setTextColour(colours.red)
+                monitor.write(port.failure)
+                y = y + 2
+            else
+                local store_x = w - ui.store_button
+                local unload_x = store_x - 1 - ui.unload_button
+
+                for _, row in ipairs({
+                    { label = "in", item = port.waiting },
+                    { label = "out", item = port.done },
+                }) do
+                    local limit = (row.label == "out" and port.done) and unload_x - 10 or w - 10
+
+                    monitor.setBackgroundColour(colours.black)
+                    monitor.setCursorPos(4, y)
+                    monitor.setTextColour(colours.grey)
+                    monitor.write(row.label)
+
+                    monitor.setCursorPos(9, y)
+                    monitor.setTextColour(row.item and colours.white or colours.grey)
+                    monitor.write((row.item and format_name(row.item.name) or "empty"):sub(1, limit))
+
+                    y = y + 1
+                end
+
+                -- both buttons act on the finished cell, so they live on its row
+                if port.done then
+                    local row_y = y - 1
+
+                    controls[#controls + 1] = { x = unload_x, y = row_y, w = ui.unload_button, h = 1,
+                        kind = "unload", value = port.name }
+                    draw_button(unload_x, row_y, ui.unload_button, "unload", colours.grey, colours.white, 1)
+
+                    controls[#controls + 1] = { x = store_x, y = row_y, w = ui.store_button, h = 1,
+                        kind = "store", value = port.name }
+                    draw_button(store_x, row_y, ui.store_button, "store", colours.grey, colours.white, 1)
+                end
+
+                y = y + 1
+            end
         end
-        y = y + 1
     end
 
     local change_x = w - ui.change_button
@@ -1397,17 +1453,16 @@ local function input_loop()
                         barrel_picking = false
                     elseif control.kind == "change" then
                         barrel_picking = true
-                    elseif control.kind == "load" or control.kind == "unload" then
-                        local width = control.kind == "load" and ui.load_button or ui.unload_button
-                        draw_button(control.x, control.y, width, control.kind, colours.white, colours.grey)
+                    elseif control.kind == "load" or control.kind == "unload"
+                        or control.kind == "store" then
+                        local widths = { load = ui.load_button, unload = ui.unload_button,
+                            store = ui.store_button }
+                        draw_button(control.x, control.y, widths[control.kind], control.kind,
+                            colours.white, colours.grey)
                         sleep(0.08)
 
-                        local failure
-                        if control.kind == "load" then
-                            failure = load_cell(control.value)
-                        else
-                            failure = unload_cell(control.value)
-                        end
+                        local actions = { load = load_cell, unload = unload_cell, store = store_cell }
+                        local failure = actions[control.kind](control.value)
 
                         error_toast = failure and { text = failure, expires = os.clock() + 3 } or nil
                     elseif control.kind == "pulse" then

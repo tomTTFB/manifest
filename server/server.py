@@ -26,7 +26,8 @@ def lua(name):
     path = REPO / f"{name}.lua"
     if not path.exists():
         return "no such file", 404
-    return Response(path.read_text(), mimetype="text/plain")
+    src = path.read_text().replace("__BASE__", request.host_url.rstrip("/"))
+    return Response(src, mimetype="text/plain")
 
 
 app.run(host="0.0.0.0", port=8080)

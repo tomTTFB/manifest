@@ -16,6 +16,8 @@
     --line: #1e1e1e;
     --hover: #1c1c1c;
     --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    --row: 20px;
+    --pad: 14px;
   }
 
   * { box-sizing: border-box; }
@@ -24,7 +26,7 @@
     margin: 0;
     background: var(--black);
     color: var(--white);
-    font: 14px/1.4 var(--mono);
+    font: 13px/1.2 var(--mono);
     overflow-x: hidden;
   }
 
@@ -35,10 +37,10 @@
     align-items: center;
     gap: 2px;
     border-bottom: 1px solid var(--line);
-    padding: 6px 14px 6px 8px;
+    padding: 4px var(--pad) 4px 6px;
   }
 
-  .brand { padding: 8px 12px; color: var(--light); letter-spacing: 2px; }
+  .brand { padding: 5px 10px; color: var(--light); letter-spacing: 2px; }
 
   nav { display: flex; gap: 2px; flex: 1; }
 
@@ -50,7 +52,7 @@
     color: var(--white);
   }
 
-  nav button { padding: 8px 18px; }
+  nav button { padding: 5px 14px; }
   nav button[aria-selected="true"] { background: var(--green); color: var(--black); }
 
   .link { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--light); }
@@ -61,7 +63,7 @@
     display: flex;
     gap: 8px;
     align-items: center;
-    padding: 10px 14px 10px 8px;
+    padding: 5px var(--pad) 5px 6px;
     border-bottom: 1px solid var(--line);
     flex-wrap: wrap;
   }
@@ -71,7 +73,7 @@
   input {
     font: inherit;
     width: 100%;
-    padding: 8px 34px 8px 10px;
+    padding: 5px 30px 5px 8px;
     border: 0;
     background: var(--grey);
     color: var(--white);
@@ -85,7 +87,7 @@
     right: 0;
     top: 0;
     height: 100%;
-    width: 32px;
+    width: 28px;
     border: 0;
     cursor: pointer;
     background: none;
@@ -95,28 +97,31 @@
 
   .clear:hover { color: var(--white); }
 
-  .bar button.sort { padding: 8px 14px; }
+  .bar button.sort { padding: 5px 12px; }
   .bar button.sort[aria-pressed="true"] { background: var(--green); color: var(--black); }
 
   .summary { color: var(--light); margin-left: auto; white-space: nowrap; }
 
   /* the monitor splits into columns once it is wide enough, and 34 characters
      is the width it calls too narrow to bother. same rule here. */
-  ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+  ul { list-style: none; margin: 0; padding: 0; }
+
+  /* Fills a column to the bottom of the window before starting the next, so a
+     short list stays a short list instead of smearing across the whole width. */
+  #items {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(34ch, 1fr));
-    column-gap: 24px;
+    grid-auto-flow: column;
+    column-gap: 20px;
+    padding-right: var(--pad);
   }
 
   li {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     gap: 12px;
-    padding: 6px 8px 6px 12px;
+    height: var(--row);
+    padding: 0 8px 0 10px;
     border-bottom: 1px solid var(--line);
     min-width: 0;
   }
@@ -126,14 +131,14 @@
   li .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   li b { font-weight: normal; color: var(--green); white-space: nowrap; }
 
-  .empty { padding: 22px 12px; color: var(--grey); grid-column: 1 / -1; }
+  .empty { height: auto; padding: 16px 10px; color: var(--grey); }
   .empty:hover { background: none; }
 
   h2 {
     font: inherit;
     color: var(--light);
     margin: 0;
-    padding: 16px 12px 6px;
+    padding: 12px 10px 4px;
   }
 
   .tag { color: var(--green); }
@@ -145,9 +150,9 @@
     position: sticky;
     bottom: 0;
     display: flex;
-    gap: 20px;
+    gap: 18px;
     flex-wrap: wrap;
-    padding: 8px 14px;
+    padding: 5px var(--pad);
     background: var(--black);
     border-top: 1px solid var(--line);
     color: var(--grey);
@@ -193,6 +198,9 @@ const sort = { key: "name", dir: 1 };
 let query = "";
 let lastTick = 0;
 
+const ROW = 20;        // must match --row
+const MIN_COL = 260;   // narrower than this and names start truncating
+
 const $ = id => document.getElementById(id);
 const commas = n => n.toLocaleString("en-GB");
 const arrow = key => sort.key !== key ? "" : (sort.dir > 0 ? " ↑" : " ↓");
@@ -222,13 +230,32 @@ function drawItems() {
   $("clear").hidden = !query;
 
   if (!rows.length) {
+    shape(1, 1);
     $("items").innerHTML = '<li class="empty">' +
       (all ? "nothing matches " + query : "waiting for a scan") + "</li>";
     return;
   }
 
+  shape(rows.length, fitRows());
   $("items").innerHTML = rows.map(([id, name, count]) =>
     `<li title="${id}"><span class="name">${name}</span><b>${commas(count)}</b></li>`).join("");
+}
+
+function fitRows() {
+  const chrome = document.querySelector(".top").offsetHeight + $("stats").offsetHeight;
+  return Math.max(4, Math.floor((window.innerHeight - chrome) / ROW));
+}
+
+// Down the window first, then across. Columns are only added once a column is
+// full, and never more than the width can hold, so it never scrolls sideways.
+function shape(n, perColumn) {
+  const widest = Math.max(1, Math.floor(window.innerWidth / MIN_COL));
+  const rows = Math.max(perColumn, Math.ceil(n / widest));
+  const cols = Math.ceil(n / rows);
+
+  const grid = $("items").style;
+  grid.gridTemplateRows = `repeat(${rows}, ${ROW}px)`;
+  grid.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
 }
 
 function drawSpatial() {
@@ -330,6 +357,8 @@ document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
   if (document.activeElement !== $("q")) $("q").focus();
 });
+
+window.addEventListener("resize", drawItems);
 
 setInterval(drawLink, 500);
 drawItems();

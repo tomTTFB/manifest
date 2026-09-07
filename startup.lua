@@ -23,6 +23,7 @@ local CLEAR_BUTTON = 7
 local LOAD_BUTTON = 8
 local STORE_BUTTON = 7
 local CHANGE_BUTTON = 8
+local FORMAT_BUTTON = 8
 
 local KEY_MAX_W = 9
 local KEY_MIN_W = 3
@@ -40,6 +41,9 @@ local controls = {}
 local output_offset = 0
 local barrel_offset = 0
 local barrel_picking = false
+local formatting = false
+local format_pick = nil
+local format_offset = 0
 local scale = 1
 local interval = 0.5
 local query = ""
@@ -292,6 +296,7 @@ local function layout()
         load_button = LOAD_BUTTON * u,
         store_button = STORE_BUTTON * u,
         change_button = CHANGE_BUTTON * u,
+        format_button = FORMAT_BUTTON * u,
         option_x = OPTION_X * u,
     }
 end
@@ -937,6 +942,102 @@ local function barrel_cells()
     return found
 end
 
+-- AE2 has renamed these across versions, so go by the shape of the id rather
+-- than a list of exact names. Nothing else it makes is both spatial and a cell.
+local function is_cell_item(id)
+    return id:find("spatial") ~= nil and id:find("cell") ~= nil
+end
+
+-- The scan loop only keeps counts, so finding a cell to format means looking
+-- again for the slot one is actually sitting in. Listed in parallel, same as a
+-- scan, or opening the menu would stall for as long as there are chests.
+local function spare_cells()
+    local found = {}
+    local tasks = {}
+
+    for _, name in ipairs(storage()) do
+        tasks[#tasks + 1] = function()
+            local ok, slots = pcall(peripheral.call, name, "list")
+            if ok and slots then
+                for slot, item in pairs(slots) do
+                    if is_cell_item(item.name) then
+                        -- a cell only carries nbt once it has been formatted, so
+                        -- a bare stack is one that has never been used
+                        found[#found + 1] = { inv = name, slot = slot, fresh = item.nbt == nil,
+                            label = cell_label(name, slot, item) }
+                    end
+                end
+            end
+        end
+    end
+
+    if #tasks > 0 then
+        parallel.waitForAll(table.unpack(tasks))
+    end
+
+    table.sort(found, function(a, b)
+        if a.fresh ~= b.fresh then return a.fresh end
+        if a.label ~= b.label then return a.label < b.label end
+        if a.inv ~= b.inv then return a.inv < b.inv end
+        return a.slot < b.slot
+    end)
+
+    return found
+end
+
+local function empty_barrel_slot()
+    local ok, slots = pcall(peripheral.call, barrel, "list")
+    if not ok or not slots then return nil end
+
+    for slot = 1, peripheral.call(barrel, "size") do
+        if not slots[slot] then return slot end
+    end
+end
+
+-- Formatting is just a cell's first capture: an unformatted one takes the shape
+-- of whatever the pylons enclose and comes out holding it, so it lands in the
+-- barrel already loaded. The slot is picked beforehand because that is what the
+-- mark is keyed to.
+local function format_cell(pick)
+    if not pick then return "pick a cell first" end
+    if not barrel then return "no cell barrel set" end
+
+    local port = spatial_ports()[1]
+    if not port then return "no spatial IO port" end
+
+    local slots = port_slots(port)
+    if not slots then return "port unreadable" end
+    if slots[PORT_IN] then return "port is busy" end
+    if slots[PORT_OUT] then return "clear the port first" end
+
+    local home = empty_barrel_slot()
+    if not home then return "barrel is full" end
+
+    if peripheral.call(pick.inv, "pushItems", port, pick.slot, 1, PORT_IN) == 0 then
+        return "could not move the cell"
+    end
+
+    local failure = pulse()
+    if failure then return failure end
+
+    for _ = 1, 20 do
+        sleep(0.25)
+
+        local now = port_slots(port)
+        if now and now[PORT_OUT] then
+            if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1, home) == 0 then
+                return "barrel is full"
+            end
+
+            loaded[home] = true
+            save_config()
+            return
+        end
+    end
+
+    return "transfer did not finish"
+end
+
 -- Every peripheral read the tab needs, collected before a single character is
 -- painted. Calls over a wired modem yield, and yielding after the body has been
 -- wiped leaves the blank frame on screen long enough to flicker.
@@ -972,6 +1073,7 @@ local function spatial_view()
         ports = ports,
         inventories = inventories,
         cells = barrel and barrel_cells() or nil,
+        spare = formatting and spare_cells() or nil,
     }
 end
 
@@ -1038,6 +1140,74 @@ local function draw_barrel_picker(ui, y, bottom, found)
     end
 end
 
+local function draw_format_menu(ui, y, bottom, found)
+    local w = ui.w
+    local back_x = w - ui.format_button
+    local button_y = bottom - ui.box
+
+    monitor.setBackgroundColour(colours.black)
+    monitor.setCursorPos(2, y)
+    monitor.setTextColour(colours.lightGrey)
+    monitor.write("Format a cell")
+
+    controls[#controls + 1] = { x = back_x, y = y, w = ui.format_button, h = 1, kind = "back" }
+    draw_button(back_x, y, ui.format_button, "back", colours.black, colours.grey, 1)
+    y = y + 1
+
+    if #found == 0 then
+        monitor.setCursorPos(2, y)
+        monitor.setTextColour(colours.grey)
+        monitor.write("no spare cells in storage")
+    else
+        local space = math.max(1, button_y - y - 1)
+        local rows = #found > space and math.max(1, space - ui.box) or space
+
+        if format_offset >= #found then
+            format_offset = 0
+        end
+
+        for i = 1, rows do
+            local cell = found[format_offset + i]
+            if not cell then break end
+
+            local row_y = y + i - 1
+            local chosen = format_pick and format_pick.inv == cell.inv
+                and format_pick.slot == cell.slot
+            local tag = cell.fresh and "" or "has data"
+            local text = cell.label:sub(1, w - 5 - #tag)
+
+            controls[#controls + 1] = { x = 2, y = row_y, w = w - 2, h = 1, kind = "pick", value = cell }
+
+            monitor.setCursorPos(2, row_y)
+            monitor.setBackgroundColour(chosen and colours.green or colours.black)
+            monitor.setTextColour(chosen and colours.black or colours.white)
+            monitor.write(" " .. text .. string.rep(" ", w - 4 - #text - #tag) .. tag .. " ")
+        end
+
+        if #found > rows then
+            local more_y = y + rows
+
+            controls[#controls + 1] = { x = 2, y = more_y, w = ui.more_button, h = ui.box,
+                kind = "format_more", value = rows }
+            draw_button(2, more_y, ui.more_button, "more", colours.grey, colours.white, ui.box)
+        end
+    end
+
+    controls[#controls + 1] = { x = 2, y = button_y, w = ui.format_button, h = ui.box,
+        kind = "format", value = format_pick }
+    draw_button(2, button_y, ui.format_button, "format",
+        format_pick and colours.green or colours.grey,
+        format_pick and colours.black or colours.white, ui.box)
+
+    -- the pylons are nowhere on this screen, so say what the button reaches for
+    local note = "captures the pylon region"
+
+    monitor.setBackgroundColour(colours.black)
+    monitor.setTextColour(colours.grey)
+    monitor.setCursorPos(3 + ui.format_button, button_y + ui.mid)
+    monitor.write(note:sub(1, w - 4 - ui.format_button))
+end
+
 local function draw_spatial()
     local view = spatial_view()
     local ui = layout()
@@ -1050,6 +1220,12 @@ local function draw_spatial()
 
     if barrel_picking or not barrel then
         draw_barrel_picker(ui, y, pulse_y - 1, view.inventories)
+        draw_pulse_row(ui, pulse_y)
+        return
+    end
+
+    if formatting then
+        draw_format_menu(ui, y, pulse_y - 1, view.spare or {})
         draw_pulse_row(ui, pulse_y)
         return
     end
@@ -1098,11 +1274,15 @@ local function draw_spatial()
     end
 
     local change_x = w - ui.change_button
+    local format_x = change_x - ui.format_button - ui.u
 
     monitor.setBackgroundColour(colours.black)
     monitor.setCursorPos(2, y)
     monitor.setTextColour(colours.lightGrey)
     monitor.write("Cells")
+
+    controls[#controls + 1] = { x = format_x, y = y, w = ui.format_button, h = 1, kind = "format_open" }
+    draw_button(format_x, y, ui.format_button, "format", colours.black, colours.grey, 1)
 
     controls[#controls + 1] = { x = change_x, y = y, w = ui.change_button, h = 1, kind = "change" }
     draw_button(change_x, y, ui.change_button, "change", colours.black, colours.grey, 1)
@@ -1534,6 +1714,32 @@ local function input_loop()
                         barrel_picking = false
                     elseif control.kind == "change" then
                         barrel_picking = true
+                    elseif control.kind == "format_open" then
+                        formatting = true
+                        format_pick, format_offset = nil, 0
+                    elseif control.kind == "back" then
+                        formatting, format_pick = false, nil
+                    elseif control.kind == "pick" then
+                        -- tapping the highlighted row again clears it
+                        local same = format_pick and format_pick.inv == control.value.inv
+                            and format_pick.slot == control.value.slot
+
+                        format_pick = not same and control.value or nil
+                    elseif control.kind == "format" then
+                        draw_button(control.x, control.y, ui.format_button, "format",
+                            colours.white, colours.grey, ui.box)
+                        sleep(0.08)
+
+                        local failure = format_cell(control.value)
+
+                        if failure then
+                            error_toast = { text = failure, expires = os.clock() + 3 }
+                        else
+                            -- back to the list, where the new cell is now sitting
+                            formatting, format_pick, error_toast = false, nil, nil
+                        end
+                    elseif control.kind == "format_more" then
+                        format_offset = format_offset + control.value
                     elseif ACTIONS[control.kind] then
                         local action = ACTIONS[control.kind]
 

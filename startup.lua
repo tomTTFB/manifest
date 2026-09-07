@@ -32,12 +32,13 @@ local LIST_ROOM = 12
 
 local CONFIG = "manifest.cfg"
 
--- The install server bakes its own address in here and the bridge listens
--- beside it on the next port. A copy installed by hand keeps the placeholder,
--- which has no port to swap and no http on the front, so the bridge stays shut.
+-- Where the bridge lives is a setting, because it does not have to be the
+-- machine the files came from. The address the install server bakes in here is
+-- only the fallback for when manifest.cfg does not say.
+local BAKED = "__BASE__"
 local BRIDGE_PORT = 8081
-local SERVER, swapped = ("__BASE__"):gsub(":%d+$", ":" .. BRIDGE_PORT)
-local bridge = { on = swapped == 1 and SERVER:sub(1, 4) == "http" }
+local SERVER = ""
+local bridge = { on = false }
 
 -- the failure text comes from outside, and the debug column is 12 wide
 local function bridge_line()
@@ -80,6 +81,7 @@ local stats = { chests = "0/0", elapsed = 0 }
 local pager = { y = 1, prev_x = 1, next_x = 1 }
 local sent_counts = {}
 local sent_types = 0
+local bridge_url = nil
 local request = { top = 1, y = 1, button_x = 1, clear_x = 1, steps = {} }
 
 local function commas(n)
@@ -127,6 +129,7 @@ local function load_config()
         barrel = body:match("barrel=([^\r\n]+)"),
         pulse = body:match("pulse=([^\r\n]+)"),
         relay = body:match("relay=([^\r\n]+)"),
+        bridge = body:match("bridge=([^\r\n]+)"),
         loaded = body:match("loaded=([^\r\n]+)"),
     }
 end
@@ -139,6 +142,7 @@ local function save_config()
     f.write("barrel=" .. (barrel or "") .. "\n")
     f.write("pulse=" .. pulse_side .. "\n")
     f.write("relay=" .. (relay or "") .. "\n")
+    f.write("bridge=" .. (bridge_url or "") .. "\n")
 
     local marked = {}
     for slot in pairs(loaded) do
@@ -1421,6 +1425,14 @@ local function draw_settings()
         draw_button(2, y, ui.more_button, "more", colours.grey, colours.white, ui.box)
     end
 
+    -- a url is not something anyone should have to type on a monitor
+    monitor.setBackgroundColour(colours.black)
+    monitor.setCursorPos(2, scale_y - 1)
+    monitor.setTextColour(colours.lightGrey)
+    monitor.write("Bridge")
+    monitor.setTextColour(colours.grey)
+    monitor.write(("  set bridge= in manifest.cfg"):sub(1, w - 8))
+
     draw_options(scale_y, "Text scale", SCALES, scale, "scale", "")
     draw_options(interval_y, "Scan every", INTERVALS, interval, "interval", "s")
 end
@@ -1937,6 +1949,20 @@ interval = config.interval or interval
 barrel = config.barrel
 pulse_side = config.pulse or pulse_side
 relay = config.relay
+bridge_url = config.bridge
+
+-- A configured address wins outright. Without one, assume the bridge sits
+-- beside whatever server this was installed from, on the next port along; a
+-- copy installed by hand has no port to swap and so ends up with no bridge.
+SERVER = bridge_url
+
+if not SERVER then
+    local guess, swapped = BAKED:gsub(":%d+$", ":" .. BRIDGE_PORT)
+    SERVER = swapped == 1 and guess or ""
+end
+
+SERVER = SERVER:gsub("/+$", "")
+bridge.on = SERVER:sub(1, 4) == "http"
 
 for slot in (config.loaded or ""):gmatch("%d+") do
     loaded[tonumber(slot)] = true

@@ -66,23 +66,24 @@ local function suppliers(entry, list)
     return n
 end
 
-local function saved()
+local function saved(key)
     if not fs.exists(CONFIG) then return end
     local f = fs.open(CONFIG, "r")
     local body = f.readAll()
     f.close()
-    return body:match("output=([^\r\n]+)")
+    return body:match(key .. "=([^\r\n]+)")
 end
 
 -- the settings tab keeps scale and interval in this same file, so don't drop
--- them just because this screen only ever sets the output
-local function save(name)
+-- the keys this screen has no opinion about
+local function save(values)
     local kept = {}
 
     if fs.exists(CONFIG) then
         local existing = fs.open(CONFIG, "r")
         for line in existing.readAll():gmatch("[^\r\n]+") do
-            if not line:match("^output=") then
+            local key = line:match("^([%w_]+)=")
+            if not (key and values[key]) then
                 kept[#kept + 1] = line
             end
         end
@@ -90,11 +91,26 @@ local function save(name)
     end
 
     local f = fs.open(CONFIG, "w")
-    f.write("output=" .. name .. "\n")
+    for key, value in pairs(values) do
+        f.write(key .. "=" .. value .. "\n")
+    end
     for _, line in ipairs(kept) do
         f.write(line .. "\n")
     end
     f.close()
+end
+
+-- The web bridge can be any machine that this computer can reach, which is not
+-- necessarily the one the files came from, so it gets asked for rather than
+-- assumed. Blank falls back to the install server on the next port.
+local function ask_bridge()
+    print()
+    print("Web bridge address, or blank to use whatever")
+    print("machine Manifest was installed from:")
+    write("  ")
+
+    local answer = read(nil, nil, nil, saved("bridge"))
+    return (answer:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 local function draw(list, pick, top, rows)
@@ -156,7 +172,7 @@ if #list == 0 then
 end
 
 local rows = select(2, term.getSize()) - 6
-local current = saved()
+local current = saved("output")
 local pick, top = 1, 1
 
 for i, entry in ipairs(list) do
@@ -179,7 +195,6 @@ while true do
         pick = math.min(#list, pick + 1)
     elseif key == keys.enter then
         chosen = list[pick].name
-        save(chosen)
         break
     elseif key == keys.q then
         break
@@ -191,9 +206,20 @@ term.setTextColour(colours.white)
 term.clear()
 term.setCursorPos(1, 1)
 
-if chosen then
-    print("Output set to " .. chosen)
-    print("Reboot to run Manifest with it.")
-else
+if not chosen then
     print("No change.")
+    return
 end
+
+print("Output set to " .. chosen)
+
+local url = ask_bridge()
+save({ output = chosen, bridge = url })
+
+print()
+if url == "" then
+    print("Bridge follows the install server.")
+else
+    print("Bridge at " .. url)
+end
+print("Reboot to run Manifest.")

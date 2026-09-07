@@ -14,6 +14,7 @@
     --green: #6abe5c;
     --red: #cc4c4c;
     --line: #1e1e1e;
+    --hover: #1c1c1c;
     --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
   }
 
@@ -24,89 +25,115 @@
     background: var(--black);
     color: var(--white);
     font: 14px/1.4 var(--mono);
+    overflow-x: hidden;
   }
+
+  .top { position: sticky; top: 0; z-index: 2; background: var(--black); }
 
   header {
     display: flex;
-    align-items: stretch;
+    align-items: center;
     gap: 2px;
-    background: var(--black);
     border-bottom: 1px solid var(--line);
-    padding: 6px 8px;
+    padding: 6px 14px 6px 8px;
   }
 
   .brand { padding: 8px 12px; color: var(--light); letter-spacing: 2px; }
 
   nav { display: flex; gap: 2px; flex: 1; }
 
-  nav button {
+  nav button, .bar button {
     font: inherit;
-    padding: 8px 18px;
     border: 0;
     cursor: pointer;
     background: var(--grey);
     color: var(--white);
   }
 
+  nav button { padding: 8px 18px; }
   nav button[aria-selected="true"] { background: var(--green); color: var(--black); }
 
-  .link { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--light); }
-  .dot { width: 10px; height: 10px; background: var(--red); }
+  .link { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--light); }
+  .dot { width: 10px; height: 10px; background: var(--red); flex: none; }
   .link.up .dot { background: var(--green); }
 
   .bar {
     display: flex;
     gap: 8px;
     align-items: center;
-    padding: 10px 8px;
+    padding: 10px 14px 10px 8px;
     border-bottom: 1px solid var(--line);
     flex-wrap: wrap;
   }
 
+  .field { position: relative; display: flex; flex: 0 1 46ch; min-width: 18ch; }
+
   input {
     font: inherit;
-    flex: 1;
-    min-width: 12ch;
-    padding: 8px 10px;
+    width: 100%;
+    padding: 8px 34px 8px 10px;
     border: 0;
     background: var(--grey);
     color: var(--white);
   }
 
   input::placeholder { color: var(--light); }
+  input:focus { outline: 2px solid var(--green); outline-offset: -2px; }
 
-  .bar button {
-    font: inherit;
-    padding: 8px 14px;
+  .clear {
+    position: absolute;
+    right: 0;
+    top: 0;
+    height: 100%;
+    width: 32px;
     border: 0;
     cursor: pointer;
-    background: var(--grey);
-    color: var(--white);
+    background: none;
+    color: var(--light);
+    font: inherit;
   }
 
-  .bar button[aria-pressed="true"] { background: var(--green); color: var(--black); }
+  .clear:hover { color: var(--white); }
 
-  .count { color: var(--light); margin-left: auto; }
+  .bar button.sort { padding: 8px 14px; }
+  .bar button.sort[aria-pressed="true"] { background: var(--green); color: var(--black); }
 
-  ul { list-style: none; margin: 0; padding: 0; }
+  .summary { color: var(--light); margin-left: auto; white-space: nowrap; }
+
+  /* the monitor splits into columns once it is wide enough, and 34 characters
+     is the width it calls too narrow to bother. same rule here. */
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(34ch, 1fr));
+    column-gap: 24px;
+  }
 
   li {
     display: flex;
     justify-content: space-between;
-    gap: 16px;
-    padding: 7px 12px;
+    align-items: baseline;
+    gap: 12px;
+    padding: 6px 8px 6px 12px;
     border-bottom: 1px solid var(--line);
+    min-width: 0;
   }
 
-  li b { font-weight: normal; color: var(--green); }
+  li:hover { background: var(--hover); }
 
-  .empty { padding: 24px 12px; color: var(--grey); }
+  li .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li b { font-weight: normal; color: var(--green); white-space: nowrap; }
+
+  .empty { padding: 22px 12px; color: var(--grey); grid-column: 1 / -1; }
+  .empty:hover { background: none; }
 
   h2 {
     font: inherit;
     color: var(--light);
     margin: 0;
-    padding: 14px 12px 6px;
+    padding: 16px 12px 6px;
   }
 
   .tag { color: var(--green); }
@@ -120,37 +147,41 @@
     display: flex;
     gap: 20px;
     flex-wrap: wrap;
-    padding: 8px 12px;
+    padding: 8px 14px;
     background: var(--black);
     border-top: 1px solid var(--line);
     color: var(--grey);
   }
 
+  footer.stale { opacity: 0.45; }
   footer span b { font-weight: normal; color: var(--light); }
 </style>
 </head>
 <body>
 
-<header>
-  <span class="brand">MANIFEST</span>
-  <nav>
-    <button data-tab="manifest" aria-selected="true">Manifest</button>
-    <button data-tab="spatial" aria-selected="false">Spatial</button>
-  </nav>
-  <span class="link" id="link"><i class="dot"></i><span id="linkText">connecting</span></span>
-</header>
+<div class="top">
+  <header>
+    <span class="brand">MANIFEST</span>
+    <nav>
+      <button data-tab="manifest" aria-selected="true">Manifest</button>
+      <button data-tab="spatial" aria-selected="false">Spatial</button>
+    </nav>
+    <span class="link" id="link"><i class="dot"></i><span id="linkText">connecting</span></span>
+  </header>
+
+  <div class="bar" id="searchbar">
+    <span class="field">
+      <input id="q" placeholder="search" autocomplete="off" spellcheck="false" autofocus>
+      <button class="clear" id="clear" hidden title="clear (esc)">&times;</button>
+    </span>
+    <button class="sort" id="byName" aria-pressed="true">name</button>
+    <button class="sort" id="byCount" aria-pressed="false">count</button>
+    <span class="summary" id="summary"></span>
+  </div>
+</div>
 
 <main>
-  <section id="manifest">
-    <div class="bar">
-      <input id="q" placeholder="search" autocomplete="off" spellcheck="false">
-      <button id="byName" aria-pressed="true">name</button>
-      <button id="byCount" aria-pressed="false">count</button>
-      <span class="count" id="summary"></span>
-    </div>
-    <ul id="items"></ul>
-  </section>
-
+  <section id="manifest"><ul id="items"></ul></section>
   <section id="spatial" hidden></section>
 </main>
 
@@ -158,12 +189,13 @@
 
 <script>
 const state = { items: [], stats: {}, spatial: null, output: null };
-let sort = "name";
+const sort = { key: "name", dir: 1 };
 let query = "";
 let lastTick = 0;
 
 const $ = id => document.getElementById(id);
 const commas = n => n.toLocaleString("en-GB");
+const arrow = key => sort.key !== key ? "" : (sort.dir > 0 ? " ↑" : " ↓");
 
 function matching() {
   if (!query) return state.items;
@@ -174,20 +206,29 @@ function matching() {
 
 function drawItems() {
   const rows = matching().slice();
-  rows.sort(sort === "count"
-    ? (a, b) => b[2] - a[2]
-    : (a, b) => a[1].localeCompare(b[1]));
+  // ties in a count sort fall back to name, so the order never depends on
+  // whatever order the feed happened to arrive in
+  rows.sort(sort.key === "count"
+    ? (a, b) => (b[2] - a[2]) * sort.dir || a[1].localeCompare(b[1])
+    : (a, b) => a[1].localeCompare(b[1]) * sort.dir);
 
-  $("summary").textContent = rows.length + (rows.length === 1 ? " type" : " types");
+  const all = state.items.length;
+  $("summary").textContent = query
+    ? `${rows.length} of ${all}`
+    : all + (all === 1 ? " type" : " types");
+
+  $("byName").textContent = "name" + arrow("name");
+  $("byCount").textContent = "count" + arrow("count");
+  $("clear").hidden = !query;
 
   if (!rows.length) {
     $("items").innerHTML = '<li class="empty">' +
-      (state.items.length ? "nothing matches" : "waiting for a scan") + "</li>";
+      (all ? "nothing matches " + query : "waiting for a scan") + "</li>";
     return;
   }
 
   $("items").innerHTML = rows.map(([id, name, count]) =>
-    `<li title="${id}"><span>${name}</span><b>${commas(count)}</b></li>`).join("");
+    `<li title="${id}"><span class="name">${name}</span><b>${commas(count)}</b></li>`).join("");
 }
 
 function drawSpatial() {
@@ -199,10 +240,10 @@ function drawSpatial() {
   }
 
   const ports = (s.ports || []).map(p =>
-    `<li><span>${p.name}</span><span class="state-${p.state}">${p.state}</span></li>`).join("");
+    `<li><span class="name">${p.name}</span><span class="state-${p.state}">${p.state}</span></li>`).join("");
 
   const cells = (s.cells || []).map(c =>
-    `<li><span>${c.label}</span>${c.loaded ? '<span class="tag">loaded</span>' : ""}</li>`).join("");
+    `<li><span class="name">${c.label}</span>${c.loaded ? '<span class="tag">loaded</span>' : ""}</li>`).join("");
 
   $("spatial").innerHTML =
     "<h2>Spatial IO</h2><ul>" + (ports || '<li class="empty">No ports on the network</li>') + "</ul>" +
@@ -213,8 +254,12 @@ function drawSpatial() {
 
 function drawStats() {
   const s = state.stats;
+  let total = 0;
+  for (const item of state.items) total += item[2];
+
   const bits = [
     ["chests", s.chests || "-"],
+    ["items", commas(total)],
     ["scan", s.elapsed == null ? "-" : s.elapsed + "ms"],
     ["json", s.json == null ? "-" : s.json + "ms"],
     ["every", s.interval == null ? "-" : s.interval + "s"],
@@ -228,6 +273,7 @@ function drawStats() {
 function drawLink() {
   const up = lastTick && Date.now() - lastTick < 2500;
   $("link").classList.toggle("up", up);
+  $("stats").classList.toggle("stale", !up);
   $("linkText").textContent = up ? "live" : (lastTick ? "no ticks" : "connecting");
 }
 
@@ -246,26 +292,44 @@ events.onmessage = e => {
   drawLink();
 };
 
-$("q").addEventListener("input", e => { query = e.target.value; drawItems(); });
+function search(text) {
+  query = text;
+  $("q").value = text;
+  drawItems();
+}
 
-for (const [id, kind] of [["byName", "name"], ["byCount", "count"]]) {
+$("q").addEventListener("input", e => search(e.target.value));
+$("clear").addEventListener("click", () => { search(""); $("q").focus(); });
+
+for (const [id, key] of [["byName", "name"], ["byCount", "count"]]) {
   $(id).addEventListener("click", () => {
-    sort = kind;
-    $("byName").ariaPressed = String(sort === "name");
-    $("byCount").ariaPressed = String(sort === "count");
+    // clicking the sort you are already on turns it round
+    sort.dir = sort.key === key ? -sort.dir : 1;
+    sort.key = key;
+    $("byName").ariaPressed = String(key === "name");
+    $("byCount").ariaPressed = String(key === "count");
     drawItems();
   });
 }
 
 for (const button of document.querySelectorAll("nav button")) {
   button.addEventListener("click", () => {
+    const manifest = button.dataset.tab === "manifest";
     for (const other of document.querySelectorAll("nav button")) {
       const on = other === button;
       other.ariaSelected = String(on);
       $(other.dataset.tab).hidden = !on;
     }
+    $("searchbar").hidden = !manifest;
   });
 }
+
+// typing anywhere should land in the search box, the way it does on the monitor
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") return search("");
+  if (e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
+  if (document.activeElement !== $("q")) $("q").focus();
+});
 
 setInterval(drawLink, 500);
 drawItems();

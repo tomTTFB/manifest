@@ -23,7 +23,7 @@ local CLEAR_BUTTON = 7
 local LOAD_BUTTON = 8
 local STORE_BUTTON = 7
 local CHANGE_BUTTON = 8
-local FORMAT_BUTTON = 8
+local FORMAT_BUTTON = 10
 
 local KEY_MAX_W = 9
 local KEY_MIN_W = 3
@@ -1282,7 +1282,7 @@ local function draw_spatial()
     monitor.write("Cells")
 
     controls[#controls + 1] = { x = format_x, y = y, w = ui.format_button, h = 1, kind = "format_open" }
-    draw_button(format_x, y, ui.format_button, "format", colours.black, colours.grey, 1)
+    draw_button(format_x, y, ui.format_button, "format", colours.green, colours.black, 1)
 
     controls[#controls + 1] = { x = change_x, y = y, w = ui.change_button, h = 1, kind = "change" }
     draw_button(change_x, y, ui.change_button, "change", colours.black, colours.grey, 1)

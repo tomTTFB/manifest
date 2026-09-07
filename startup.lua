@@ -1059,7 +1059,7 @@ end
 -- Every peripheral read the tab needs, collected before a single character is
 -- painted. Calls over a wired modem yield, and yielding after the body has been
 -- wiped leaves the blank frame on screen long enough to flicker.
-local function spatial_view()
+local function port_states()
     local ports = {}
 
     for _, name in ipairs(spatial_ports()) do
@@ -1077,6 +1077,10 @@ local function spatial_view()
         ports[#ports + 1] = { name = name, state = state }
     end
 
+    return ports
+end
+
+local function spatial_view()
     local inventories = {}
 
     for _, name in ipairs(peripheral.getNames()) do
@@ -1088,7 +1092,7 @@ local function spatial_view()
     table.sort(inventories)
 
     return {
-        ports = ports,
+        ports = port_states(),
         inventories = inventories,
         cells = barrel and barrel_cells() or nil,
         spare = formatting and spare_cells() or nil,
@@ -1608,6 +1612,24 @@ local function scan_loop()
     end
 end
 
+-- an empty lua table serialises as {}, which is not the empty list
+local function json_list(list)
+    if not list then return nil end
+    return #list > 0 and list or textutils.empty_json_array
+end
+
+-- Ports and cells only. The picker's inventory list costs a getMethods call on
+-- every peripheral out there and nothing on the page wants it.
+local function spatial_tick()
+    if not barrel then return nil end
+
+    return {
+        barrel = barrel,
+        ports = json_list(port_states()),
+        cells = json_list(barrel_cells()),
+    }
+end
+
 -- Counts alone settle it: if every id in stock matches what was last sent and
 -- there are as many of them, the two lists are the same list.
 local function stock_changed()
@@ -1631,6 +1653,7 @@ local function tick_body()
         output = output,
         stats = { chests = stats.chests, elapsed = stats.elapsed,
             interval = interval, json = bridge.json },
+        spatial = spatial_tick(),
     }
 
     local counts
@@ -1644,8 +1667,7 @@ local function tick_body()
             counts[item.id] = item.count
         end
 
-        -- an empty lua table serialises as {}, which is not the empty list
-        payload.items = #items > 0 and items or textutils.empty_json_array
+        payload.items = json_list(items)
     end
 
     local started = os.epoch("utc")

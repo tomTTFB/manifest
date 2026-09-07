@@ -32,10 +32,12 @@ local LIST_ROOM = 12
 
 local CONFIG = "manifest.cfg"
 
--- Baked in when the file is served. A copy installed by hand keeps the
--- placeholder, and then there is nothing to talk to and the bridge stays shut.
-local SERVER = "__BASE__"
-local bridge = { on = SERVER:sub(1, 4) == "http" }
+-- The install server bakes its own address in here and the bridge listens
+-- beside it on the next port. A copy installed by hand keeps the placeholder,
+-- which has no port to swap and no http on the front, so the bridge stays shut.
+local BRIDGE_PORT = 8081
+local SERVER, swapped = ("__BASE__"):gsub(":%d+$", ":" .. BRIDGE_PORT)
+local bridge = { on = swapped == 1 and SERVER:sub(1, 4) == "http" }
 
 -- the failure text comes from outside, and the debug column is 12 wide
 local function bridge_line()

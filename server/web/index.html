@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manifest</title>
+<style>
+  /* CC:Tweaked's palette, with the green startup.lua repalettes on boot */
+  :root {
+    --black: #111111;
+    --white: #f0f0f0;
+    --light: #999999;
+    --grey: #4c4c4c;
+    --green: #6abe5c;
+    --red: #cc4c4c;
+    --line: #1e1e1e;
+    --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--black);
+    color: var(--white);
+    font: 14px/1.4 var(--mono);
+  }
+
+  header {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    background: var(--black);
+    border-bottom: 1px solid var(--line);
+    padding: 6px 8px;
+  }
+
+  .brand { padding: 8px 12px; color: var(--light); letter-spacing: 2px; }
+
+  nav { display: flex; gap: 2px; flex: 1; }
+
+  nav button {
+    font: inherit;
+    padding: 8px 18px;
+    border: 0;
+    cursor: pointer;
+    background: var(--grey);
+    color: var(--white);
+  }
+
+  nav button[aria-selected="true"] { background: var(--green); color: var(--black); }
+
+  .link { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--light); }
+  .dot { width: 10px; height: 10px; background: var(--red); }
+  .link.up .dot { background: var(--green); }
+
+  .bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+
+  input {
+    font: inherit;
+    flex: 1;
+    min-width: 12ch;
+    padding: 8px 10px;
+    border: 0;
+    background: var(--grey);
+    color: var(--white);
+  }
+
+  input::placeholder { color: var(--light); }
+
+  .bar button {
+    font: inherit;
+    padding: 8px 14px;
+    border: 0;
+    cursor: pointer;
+    background: var(--grey);
+    color: var(--white);
+  }
+
+  .bar button[aria-pressed="true"] { background: var(--green); color: var(--black); }
+
+  .count { color: var(--light); margin-left: auto; }
+
+  ul { list-style: none; margin: 0; padding: 0; }
+
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  li b { font-weight: normal; color: var(--green); }
+
+  .empty { padding: 24px 12px; color: var(--grey); }
+
+  h2 {
+    font: inherit;
+    color: var(--light);
+    margin: 0;
+    padding: 14px 12px 6px;
+  }
+
+  .tag { color: var(--green); }
+  .state-unreadable { color: var(--red); }
+  .state-ready { color: var(--grey); }
+  .state-busy, .state-finished { color: var(--light); }
+
+  footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    background: var(--black);
+    border-top: 1px solid var(--line);
+    color: var(--grey);
+  }
+
+  footer span b { font-weight: normal; color: var(--light); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">MANIFEST</span>
+  <nav>
+    <button data-tab="manifest" aria-selected="true">Manifest</button>
+    <button data-tab="spatial" aria-selected="false">Spatial</button>
+  </nav>
+  <span class="link" id="link"><i class="dot"></i><span id="linkText">connecting</span></span>
+</header>
+
+<main>
+  <section id="manifest">
+    <div class="bar">
+      <input id="q" placeholder="search" autocomplete="off" spellcheck="false">
+      <button id="byName" aria-pressed="true">name</button>
+      <button id="byCount" aria-pressed="false">count</button>
+      <span class="count" id="summary"></span>
+    </div>
+    <ul id="items"></ul>
+  </section>
+
+  <section id="spatial" hidden></section>
+</main>
+
+<footer id="stats"></footer>
+
+<script>
+const state = { items: [], stats: {}, spatial: null, output: null };
+let sort = "name";
+let query = "";
+let lastTick = 0;
+
+const $ = id => document.getElementById(id);
+const commas = n => n.toLocaleString("en-GB");
+
+function matching() {
+  if (!query) return state.items;
+  const needle = query.toLowerCase();
+  return state.items.filter(([id, name]) =>
+    name.toLowerCase().includes(needle) || id.includes(needle));
+}
+
+function drawItems() {
+  const rows = matching().slice();
+  rows.sort(sort === "count"
+    ? (a, b) => b[2] - a[2]
+    : (a, b) => a[1].localeCompare(b[1]));
+
+  $("summary").textContent = rows.length + (rows.length === 1 ? " type" : " types");
+
+  if (!rows.length) {
+    $("items").innerHTML = '<li class="empty">' +
+      (state.items.length ? "nothing matches" : "waiting for a scan") + "</li>";
+    return;
+  }
+
+  $("items").innerHTML = rows.map(([id, name, count]) =>
+    `<li title="${id}"><span>${name}</span><b>${commas(count)}</b></li>`).join("");
+}
+
+function drawSpatial() {
+  const s = state.spatial;
+
+  if (!s) {
+    $("spatial").innerHTML = '<p class="empty">No cell barrel set. Pick one on the monitor.</p>';
+    return;
+  }
+
+  const ports = (s.ports || []).map(p =>
+    `<li><span>${p.name}</span><span class="state-${p.state}">${p.state}</span></li>`).join("");
+
+  const cells = (s.cells || []).map(c =>
+    `<li><span>${c.label}</span>${c.loaded ? '<span class="tag">loaded</span>' : ""}</li>`).join("");
+
+  $("spatial").innerHTML =
+    "<h2>Spatial IO</h2><ul>" + (ports || '<li class="empty">No ports on the network</li>') + "</ul>" +
+    `<h2>Cells in ${s.barrel}</h2><ul>` +
+    (s.cells ? (cells || '<li class="empty">no cells in the barrel</li>')
+             : '<li class="empty state-unreadable">barrel unreadable</li>') + "</ul>";
+}
+
+function drawStats() {
+  const s = state.stats;
+  const bits = [
+    ["chests", s.chests || "-"],
+    ["scan", s.elapsed == null ? "-" : s.elapsed + "ms"],
+    ["json", s.json == null ? "-" : s.json + "ms"],
+    ["every", s.interval == null ? "-" : s.interval + "s"],
+    ["output", state.output || "none"],
+  ];
+  $("stats").innerHTML = bits.map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+}
+
+// the computer ticks twice a second, so silence for longer than a couple of
+// ticks means it stopped rather than that nothing changed
+function drawLink() {
+  const up = lastTick && Date.now() - lastTick < 2500;
+  $("link").classList.toggle("up", up);
+  $("linkText").textContent = up ? "live" : (lastTick ? "no ticks" : "connecting");
+}
+
+const events = new EventSource("/api/events");
+
+events.onmessage = e => {
+  const msg = JSON.parse(e.data);
+  const fresh = msg.items !== undefined;
+
+  Object.assign(state, msg);
+  lastTick = Date.now();
+
+  if (fresh) drawItems();
+  drawSpatial();
+  drawStats();
+  drawLink();
+};
+
+$("q").addEventListener("input", e => { query = e.target.value; drawItems(); });
+
+for (const [id, kind] of [["byName", "name"], ["byCount", "count"]]) {
+  $(id).addEventListener("click", () => {
+    sort = kind;
+    $("byName").ariaPressed = String(sort === "name");
+    $("byCount").ariaPressed = String(sort === "count");
+    drawItems();
+  });
+}
+
+for (const button of document.querySelectorAll("nav button")) {
+  button.addEventListener("click", () => {
+    for (const other of document.querySelectorAll("nav button")) {
+      const on = other === button;
+      other.ariaSelected = String(on);
+      $(other.dataset.tab).hidden = !on;
+    }
+  });
+}
+
+setInterval(drawLink, 500);
+drawItems();
+drawStats();
+</script>
+</body>
+</html>

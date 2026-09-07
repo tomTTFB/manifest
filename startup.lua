@@ -20,7 +20,7 @@ local STEP_BUTTON = 4
 local QTY_MIN = 3
 local REQUEST_BUTTON = 9
 local CLEAR_BUTTON = 7
-local LOAD_BUTTON = 6
+local LOAD_BUTTON = 8
 local STORE_BUTTON = 7
 local CHANGE_BUTTON = 8
 
@@ -53,6 +53,7 @@ local barrel = nil
 local pulse_side = "back"
 local relay = nil
 local cell_names = {}
+local loaded = {}
 local status = nil
 local error_toast = nil
 local stats = { chests = "0/0", elapsed = 0 }
@@ -104,6 +105,7 @@ local function load_config()
         barrel = body:match("barrel=([^\r\n]+)"),
         pulse = body:match("pulse=([^\r\n]+)"),
         relay = body:match("relay=([^\r\n]+)"),
+        loaded = body:match("loaded=([^\r\n]+)"),
     }
 end
 
@@ -115,6 +117,14 @@ local function save_config()
     f.write("barrel=" .. (barrel or "") .. "\n")
     f.write("pulse=" .. pulse_side .. "\n")
     f.write("relay=" .. (relay or "") .. "\n")
+
+    local marked = {}
+    for slot in pairs(loaded) do
+        marked[#marked + 1] = slot
+    end
+    table.sort(marked)
+
+    f.write("loaded=" .. table.concat(marked, "|") .. "\n")
     f.close()
 end
 
@@ -878,7 +888,7 @@ local function use_cell(slot)
 
         local now = port_slots(port)
         if now and now[PORT_OUT] then
-            if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1) == 0 then
+            if peripheral.call(port, "pushItems", barrel, PORT_OUT, 1, slot) == 0 then
                 return "barrel is full"
             end
             return
@@ -910,16 +920,17 @@ local function clear_port(port)
     end
 end
 
--- Names come from the item id. getItemDetail gives the real "128 Spatial
--- Storage Cell" but is far too slow to call on every redraw. TODO: cache it by
--- nbt hash, which would also tell a loaded cell from an empty one.
+-- Nothing readable on the item says whether a cell is holding a region, so the
+-- mark set when one was used is what the list goes on. It is keyed by slot,
+-- which is why use_cell is careful to put a cell back where it found it.
 local function barrel_cells()
     local ok, slots = pcall(peripheral.call, barrel, "list")
     if not ok or not slots then return nil end
 
     local found = {}
     for slot, item in pairs(slots) do
-        found[#found + 1] = { slot = slot, label = cell_label(barrel, slot, item) }
+        found[#found + 1] = { slot = slot, label = cell_label(barrel, slot, item),
+            loaded = loaded[slot] or false }
     end
 
     table.sort(found, function(a, b) return a.slot < b.slot end)
@@ -1113,16 +1124,23 @@ local function draw_spatial()
             local cell = cells[i]
             local row_y = y + i - 1
             local button_x = w - ui.load_button
-            local text = cell.label:sub(1, button_x - 4)
+            local action = cell.loaded and "unload" or "load"
+            local text = cell.label:sub(1, math.max(1, button_x - 4 - (cell.loaded and 8 or 0)))
 
             controls[#controls + 1] = { x = button_x, y = row_y, w = ui.load_button, h = 1,
-                kind = "use", value = cell.slot }
+                kind = action, value = cell.slot }
 
             monitor.setBackgroundColour(colours.black)
             monitor.setCursorPos(2, row_y)
             monitor.setTextColour(colours.white)
             monitor.write(text)
-            draw_button(button_x, row_y, ui.load_button, "use", colours.grey, colours.white, 1)
+
+            if cell.loaded then
+                monitor.setTextColour(colours.green)
+                monitor.write("  loaded")
+            end
+
+            draw_button(button_x, row_y, ui.load_button, action, colours.grey, colours.white, 1)
         end
     end
 
@@ -1208,7 +1226,8 @@ end
 -- the label on each button is its kind, so a control carries everything the
 -- handler needs to flash it and run it
 local ACTIONS = {
-    use = { run = use_cell, width = "load_button" },
+    load = { run = use_cell, width = "load_button", cell = true },
+    unload = { run = use_cell, width = "load_button", cell = true },
     pulse = { run = trigger_port, width = "store_button" },
     clear = { run = clear_port, width = "store_button" },
 }
@@ -1524,6 +1543,13 @@ local function input_loop()
 
                         local failure = action.run(control.value)
 
+                        -- one pulse does whichever transfer the cell was due, so
+                        -- a run that worked always flips which side it is on
+                        if action.cell and not failure then
+                            loaded[control.value] = not loaded[control.value] or nil
+                            save_config()
+                        end
+
                         error_toast = failure and { text = failure, expires = os.clock() + 3 } or nil
                     elseif control.kind == "side" then
                         local at = 1
@@ -1589,6 +1615,10 @@ interval = config.interval or interval
 barrel = config.barrel
 pulse_side = config.pulse or pulse_side
 relay = config.relay
+
+for slot in (config.loaded or ""):gmatch("%d+") do
+    loaded[tonumber(slot)] = true
+end
 
 if not (output and peripheral.isPresent(output)) then
     shell.run("config")

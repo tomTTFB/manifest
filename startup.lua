@@ -32,6 +32,20 @@ local LIST_ROOM = 12
 
 local CONFIG = "manifest.cfg"
 
+-- Baked in when the file is served. A copy installed by hand keeps the
+-- placeholder, and then there is nothing to talk to and the bridge stays shut.
+local SERVER = "__BASE__"
+local bridge = { on = SERVER:sub(1, 4) == "http" }
+
+-- the failure text comes from outside, and the debug column is 12 wide
+local function bridge_line()
+    if not bridge.on then return "off" end
+    if bridge.failure then return bridge.failure end
+    if not bridge.up then return "connecting" end
+
+    return "up, " .. (bridge.json or 0) .. "ms json"
+end
+
 local stock = {}
 local items = {}
 local queue = {}
@@ -62,6 +76,8 @@ local status = nil
 local error_toast = nil
 local stats = { chests = "0/0", elapsed = 0 }
 local pager = { y = 1, prev_x = 1, next_x = 1 }
+local sent_counts = {}
+local sent_types = 0
 local request = { top = 1, y = 1, button_x = 1, clear_x = 1, steps = {} }
 
 local function commas(n)
@@ -1582,10 +1598,86 @@ local function scan_loop()
             { "Queue", #queue > 0 and (#queue .. " items") or "-" },
             { "Tab", TABS[tab] },
             { "Selected", selected and (selected .. " x" .. amount) or "-" },
+            { "Bridge", bridge_line() },
         })
         draw_peripherals(17)
 
         sleep(interval)
+    end
+end
+
+-- Counts alone settle it: if every id in stock matches what was last sent and
+-- there are as many of them, the two lists are the same list.
+local function stock_changed()
+    local n = 0
+
+    for _, item in ipairs(stock) do
+        n = n + 1
+        if sent_counts[item.id] ~= item.count then return true end
+    end
+
+    return n ~= sent_types
+end
+
+-- The item list is nearly all of the payload and nearly always unchanged, so it
+-- only rides along when it differs. Timing its own serialise is the cheapest
+-- way to find out whether that cost matters; it reports the previous tick's,
+-- since a number cannot measure the thing it sits inside.
+local function tick_body()
+    local payload = {
+        at = os.epoch("utc"),
+        output = output,
+        stats = { chests = stats.chests, elapsed = stats.elapsed,
+            interval = interval, json = bridge.json },
+    }
+
+    local counts
+
+    if stock_changed() then
+        local items = {}
+        counts = {}
+
+        for i, item in ipairs(stock) do
+            items[i] = { item.id, item.name, item.count }
+            counts[item.id] = item.count
+        end
+
+        -- an empty lua table serialises as {}, which is not the empty list
+        payload.items = #items > 0 and items or textutils.empty_json_array
+    end
+
+    local started = os.epoch("utc")
+    local body = textutils.serialiseJSON(payload)
+    bridge.json = os.epoch("utc") - started
+
+    return body, counts
+end
+
+-- Its own coroutine on purpose. A server that is down, slow, or gone must never
+-- hold up a scan or a redraw, so nothing in the draw path ever waits on this.
+local function bridge_loop()
+    if not bridge.on then return end
+
+    while true do
+        local body, counts = tick_body()
+        local res, failure = http.post(SERVER .. "/tick", body,
+            { ["Content-Type"] = "application/json" })
+
+        if res then
+            res.close()
+
+            -- only now, or a post that failed would mark the list as delivered
+            if counts then
+                sent_counts, sent_types = counts, #stock
+            end
+
+            bridge.up, bridge.failure = true, nil
+            sleep(interval)
+        else
+            bridge.up = false
+            bridge.failure = tostring(failure):sub(1, 20)
+            sleep(5)
+        end
     end
 end
 
@@ -1838,4 +1930,4 @@ if monitor then
     clear(monitor)
 end
 
-parallel.waitForAll(scan_loop, input_loop)
+parallel.waitForAll(scan_loop, input_loop, bridge_loop)

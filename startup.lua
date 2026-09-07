@@ -1942,6 +1942,30 @@ local function input_loop()
     end
 end
 
+-- Asked once, on the first boot with no answer stored. Typing a url is a chore,
+-- so whatever server this was installed from is offered as the default, and the
+-- answer is always written back so this never asks twice.
+local function ask_bridge()
+    local guess, swapped = BAKED:gsub(":%d+$", ":" .. BRIDGE_PORT)
+
+    term.setBackgroundColour(colours.black)
+    term.setTextColour(colours.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+
+    print("Manifest can mirror itself to a web page.")
+    print("Where does the bridge run?")
+    print()
+    print("Enter an address, or skip for none.")
+    print()
+    write("> ")
+
+    local answer = read(nil, nil, nil, swapped == 1 and guess or nil)
+    answer = answer:gsub("^%s+", ""):gsub("%s+$", "")
+
+    return answer ~= "" and answer or "skip"
+end
+
 local config = load_config()
 output = config.output
 scale = config.scale or scale
@@ -1951,19 +1975,6 @@ pulse_side = config.pulse or pulse_side
 relay = config.relay
 bridge_url = config.bridge
 
--- A configured address wins outright. Without one, assume the bridge sits
--- beside whatever server this was installed from, on the next port along; a
--- copy installed by hand has no port to swap and so ends up with no bridge.
-SERVER = bridge_url
-
-if not SERVER then
-    local guess, swapped = BAKED:gsub(":%d+$", ":" .. BRIDGE_PORT)
-    SERVER = swapped == 1 and guess or ""
-end
-
-SERVER = SERVER:gsub("/+$", "")
-bridge.on = SERVER:sub(1, 4) == "http"
-
 for slot in (config.loaded or ""):gmatch("%d+") do
     loaded[tonumber(slot)] = true
 end
@@ -1972,6 +1983,16 @@ if not (output and peripheral.isPresent(output)) then
     shell.run("config")
     output = load_config().output
 end
+
+-- no answer in the file at all, rather than an empty one: blanking the line by
+-- hand is how you get asked again
+if bridge_url == nil then
+    bridge_url = ask_bridge()
+    save_config()
+end
+
+SERVER = (bridge_url:gsub("/+$", ""))
+bridge.on = SERVER:sub(1, 4) == "http"
 
 clear(term)
 term.setCursorBlink(false)

@@ -100,19 +100,6 @@ local function save(values)
     f.close()
 end
 
--- The web bridge can be any machine that this computer can reach, which is not
--- necessarily the one the files came from, so it gets asked for rather than
--- assumed. Blank falls back to the install server on the next port.
-local function ask_bridge()
-    print()
-    print("Web bridge address, or blank to use whatever")
-    print("machine Manifest was installed from:")
-    write("  ")
-
-    local answer = read(nil, nil, nil, saved("bridge"))
-    return (answer:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
 local function draw(list, pick, top, rows)
     local w, h = term.getSize()
 
@@ -211,15 +198,7 @@ if not chosen then
     return
 end
 
+save({ output = chosen })
+
 print("Output set to " .. chosen)
-
-local url = ask_bridge()
-save({ output = chosen, bridge = url })
-
-print()
-if url == "" then
-    print("Bridge follows the install server.")
-else
-    print("Bridge at " .. url)
-end
-print("Reboot to run Manifest.")
+print("Reboot to run Manifest with it.")

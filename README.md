@@ -12,9 +12,10 @@ network and lets you search it and pull items from a touch monitor
 ## Usage
 
 ```
-wget run http://<host>:8080/install.lua   # copy the program onto the computer
-config                                    # pick the inventory items get sent to
-reboot                                    # Manifest is startup.lua, so it runs on boot
+wget run https://raw.githubusercontent.com/tomTTFB/manifest/master/server/install.lua
+
+config    # pick the inventory items get sent to
+reboot    # Manifest is startup.lua, so it runs on boot
 ```
 
 Everything after that happens on the monitor. `config` can be re-run at any time from the
@@ -56,8 +57,9 @@ is set high on every side, so only the computer's own output needs a side pickin
 
 ## Web bridge
 
-`server/server.py` serves the repo's Lua files to the computer and bakes in whichever host
-you fetched them from, so the same installer works over localhost or the LAN. `server/bridge.py`
+`server/server.py` serves the working copy's Lua files to the computer so local edits can be
+tested without going through GitHub, and bakes its own address into the installer on the way
+out so the computer comes back to the same machine for the rest. `server/bridge.py`
 runs beside it on port 8081, holds the state the computer posts each tick, and serves a page
 that mirrors the monitor over SSE. Both need Flask and nothing else.
 

@@ -51,6 +51,25 @@ def tick():
     return jsonify(commands=commands)
 
 
+# The browser can ask for items too. Requests wait here until the computer's
+# next tick collects them, so there is no point taking one when it has stopped
+# ticking -- it would sit in the queue until something restarted.
+@app.post("/api/request")
+def api_request():
+    body = request.get_json(silent=True) or {}
+    item, count = body.get("id"), body.get("count")
+
+    if not isinstance(item, str) or not isinstance(count, int) or count < 1:
+        return jsonify(error="want an item id and a positive count"), 400
+
+    with lock:
+        if seen is None or time.time() - seen > 5:
+            return jsonify(error="the computer is not ticking"), 503
+        pending.append({"id": item, "count": count})
+
+    return jsonify(queued=count)
+
+
 @app.get("/api/state")
 def api_state():
     with lock:

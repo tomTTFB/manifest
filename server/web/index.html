@@ -146,9 +146,29 @@
   .state-ready { color: var(--grey); }
   .state-busy, .state-finished { color: var(--light); }
 
+  li[aria-selected="true"] { background: var(--grey); }
+  li .name { cursor: pointer; }
+
+  .bottom { position: sticky; bottom: 0; background: var(--black); }
+
+  .request {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 5px var(--pad);
+    border-top: 1px solid var(--line);
+  }
+
+  .request[hidden] { display: none; }
+  .request .picked { color: var(--green); }
+  .request input { width: 10ch; padding: 5px 8px; text-align: right; }
+  .request button { padding: 5px 12px; }
+  .request button.go { background: var(--green); color: var(--black); }
+  .request .note { margin-left: auto; color: var(--light); }
+  .request .note.bad { color: var(--red); }
+
   footer {
-    position: sticky;
-    bottom: 0;
     display: flex;
     gap: 18px;
     flex-wrap: wrap;
@@ -190,12 +210,27 @@
   <section id="spatial" hidden></section>
 </main>
 
-<footer id="stats"></footer>
+<div class="bottom">
+  <div class="request" id="request" hidden>
+    <span class="picked" id="picked"></span>
+    <input id="amount" inputmode="numeric" autocomplete="off">
+    <button data-step="1">+1</button>
+    <button data-step="10">+10</button>
+    <button data-step="64">+64</button>
+    <button id="all">all</button>
+    <button class="go" id="pull">pull</button>
+    <button id="drop" title="close (esc)">&times;</button>
+    <span class="note" id="note"></span>
+  </div>
+
+  <footer id="stats"></footer>
+</div>
 
 <script>
 const state = { items: [], stats: {}, spatial: null, output: null };
 const sort = { key: "name", dir: 1 };
 let query = "";
+let picked = null;
 let lastTick = 0;
 
 const ROW = 20;        // must match --row
@@ -238,11 +273,76 @@ function drawItems() {
 
   shape(rows.length, fitRows());
   $("items").innerHTML = rows.map(([id, name, count]) =>
-    `<li title="${id}"><span class="name">${name}</span><b>${commas(count)}</b></li>`).join("");
+    `<li title="${id}" data-id="${id}" aria-selected="${id === picked}">` +
+    `<span class="name">${name}</span><b>${commas(count)}</b></li>`).join("");
+}
+
+// Held live rather than copied when the row is clicked, so the stock number the
+// bar clamps against is the one the last tick brought in.
+function pickedItem() {
+  return state.items.find(([id]) => id === picked);
+}
+
+function drawRequest() {
+  const item = pickedItem();
+  $("request").hidden = !item;
+
+  if (!item) return;
+
+  $("picked").textContent = item[1];
+  $("amount").max = item[2];
+}
+
+function amountWanted() {
+  const item = pickedItem();
+  const asked = parseInt($("amount").value, 10);
+  return item ? Math.min(Math.max(asked || 0, 0), item[2]) : 0;
+}
+
+function bump(by) {
+  $("amount").value = Math.min(amountWanted() + by, pickedItem()[2]);
+}
+
+function say(text, bad) {
+  $("note").textContent = text;
+  $("note").classList.toggle("bad", !!bad);
+}
+
+async function pull() {
+  const item = pickedItem();
+  const count = amountWanted();
+
+  if (!item || count < 1) return say("nothing to pull");
+
+  say("sending " + commas(count) + "...");
+
+  const res = await fetch("/api/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: item[0], count }),
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) {
+    say("sent " + commas(count) + " " + item[1]);
+    $("amount").value = "";
+  } else {
+    say(body.error || "the bridge refused that", true);
+  }
+}
+
+function pick(id) {
+  picked = id === picked ? null : id;
+  say("");
+  $("amount").value = picked ? "1" : "";
+  drawItems();
+  drawRequest();
+  if (picked) $("amount").select();
 }
 
 function fitRows() {
-  const chrome = document.querySelector(".top").offsetHeight + $("stats").offsetHeight;
+  const chrome = document.querySelector(".top").offsetHeight +
+    document.querySelector(".bottom").offsetHeight;
   return Math.max(4, Math.floor((window.innerHeight - chrome) / ROW));
 }
 
@@ -313,7 +413,10 @@ events.onmessage = e => {
   Object.assign(state, msg);
   lastTick = Date.now();
 
-  if (fresh) drawItems();
+  if (fresh) {
+    drawItems();
+    drawRequest();
+  }
   drawSpatial();
   drawStats();
   drawLink();
@@ -324,6 +427,20 @@ function search(text) {
   $("q").value = text;
   drawItems();
 }
+
+$("items").addEventListener("click", e => {
+  const row = e.target.closest("li[data-id]");
+  if (row) pick(row.dataset.id);
+});
+
+for (const button of document.querySelectorAll(".request button[data-step]")) {
+  button.addEventListener("click", () => bump(Number(button.dataset.step)));
+}
+
+$("all").addEventListener("click", () => { $("amount").value = pickedItem()[2]; });
+$("pull").addEventListener("click", pull);
+$("drop").addEventListener("click", () => pick(picked));
+$("amount").addEventListener("keydown", e => { if (e.key === "Enter") pull(); });
 
 $("q").addEventListener("input", e => search(e.target.value));
 $("clear").addEventListener("click", () => { search(""); $("q").focus(); });
@@ -353,9 +470,9 @@ for (const button of document.querySelectorAll("nav button")) {
 
 // typing anywhere should land in the search box, the way it does on the monitor
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") return search("");
+  if (e.key === "Escape") return picked ? pick(picked) : search("");
   if (e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
-  if (document.activeElement !== $("q")) $("q").focus();
+  if (document.activeElement.tagName !== "INPUT") $("q").focus();
 });
 
 window.addEventListener("resize", drawItems);

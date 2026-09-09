@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="./banner.png" alt="Manifest — CC:Tweaked chest manager" width="100%">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/lua-CC%3ATweaked-2c2d72.svg" alt="CC:Tweaked">
   <img src="https://img.shields.io/badge/game-Minecraft-62b47a.svg" alt="Minecraft">
   <img src="https://img.shields.io/badge/web%20bridge-optional-lightgrey.svg" alt="Optional web bridge">

@@ -30,19 +30,18 @@ Settings tab.
 
 | Tab | What it covers |
 | --- | --- |
-| `Manifest` | Search, the item list, and the request bar — pick an item, set an amount, pull it |
+| `Manifest` | Search, the item list, and the request bar lets you pick an item, set an amount, pull it |
 | `Spatial` | AE2 spatial IO — load and unload cells, format a spare one, choose what pulses the port |
 | `Settings` | Output inventory, text scale, scan interval, and where the web bridge lives |
 
 ## What is scanned
 
-Every inventory peripheral on the network except the output, the cell barrel and anything
-AE2 calls spatial. If the output is on the wired network then inventories attached directly
+Every inventory peripheral (chests, barrels, etc.) on the network except the output and AE2 Spatial Cell Barrel. If the output is on the wired network then inventories attached directly
 to the computer are skipped too, since they could never push to it.
 
 All the chests are listed at once, so a scan costs about as long as the slowest single chest
-rather than the sum of them. Display names are worked out from the item id — `getItemDetail`
-is far too slow to call on every scan — so search matches both, and typing `minecraft:` or a
+rather than the sum of them. Display names are worked out from the item id `getItemDetail`
+is far too slow to call on every scan, so search matches both, and typing `minecraft:` or a
 mod prefix narrows the list to one mod's items.
 
 Requests pull from one chest at a time until the amount is filled. Anything that comes up
@@ -51,8 +50,8 @@ up where it left off.
 
 ## Spatial IO
 
-The Spatial tab drives an AE2 spatial IO port over the same network. Point it at the barrel
-where the cells live and each one gets a load or unload button; one tap moves the cell into
+The Spatial tab controls an AE2 spatial IO port over the same network. Point it at the barrel
+where the cells live and each one gets a load or unload button. one click moves the cell into
 the port, pulses it, and puts the cell back in the slot it came from. Unformatted cells can
 be formatted from storage, which captures whatever the pylons enclose.
 
@@ -77,24 +76,15 @@ when it differs. Requests typed into the page come back as the reply to a tick a
 the spot, since there is nobody stood at the monitor to press pull.
 
 The bridge is optional. Manifest asks for its address on the first boot and writes the answer
-to `manifest.cfg`, so it never asks twice — blanking the `bridge=` line by hand is how you get
+to `manifest.cfg`, so it never asks twice, blanking the `bridge=` line by hand is how you get
 asked again, and skipping it turns the whole thing off.
 
 ## Configuration
 
 `manifest.cfg` sits next to the program and holds the output inventory, the cell barrel, the
 redstone target, the bridge address, text scale, scan interval and which cells are marked as
-loaded. It is written by the program and by `config`, and there is no reason to edit it by
-hand apart from the bridge address.
+loaded. It is written by the program and by `config`
 
-## Safety
-
-Spatial IO ports are never counted as storage. Pulling someone's stored dimension out of one
-because it looked like a chest would be a bad afternoon.
-
-Everything the request bar reports is what `pushItems` actually moved, not what was asked for,
-so a full output chest shows up as a short pull rather than a lie. The bridge runs in a
-coroutine of its own — a server that is down, slow or gone never holds up a scan or a redraw.
 
 ## Disclaimer
 

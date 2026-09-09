@@ -1689,6 +1689,24 @@ local function tick_body()
     return body, counts
 end
 
+-- Requests typed into the web page come back as the reply to a tick. They skip
+-- the queue the monitor builds and dispense on the spot, because there is nobody
+-- stood at the screen to press pull.
+local function serve(commands)
+    for _, command in ipairs(commands) do
+        if type(command.id) == "string" and type(command.count) == "number" then
+            local moved, problem = dispense(command.id, command.count)
+
+            if problem then
+                error_toast = { text = problem, expires = os.clock() + 3 }
+            else
+                status = { text = "Web: " .. commas(moved) .. " " .. format_name(command.id),
+                    expires = os.clock() + 3 }
+            end
+        end
+    end
+end
+
 -- Its own coroutine on purpose. A server that is down, slow, or gone must never
 -- hold up a scan or a redraw, so nothing in the draw path ever waits on this.
 local function bridge_loop()
@@ -1700,6 +1718,7 @@ local function bridge_loop()
             { ["Content-Type"] = "application/json" })
 
         if res then
+            local reply = res.readAll()
             res.close()
 
             -- only now, or a post that failed would mark the list as delivered
@@ -1708,6 +1727,12 @@ local function bridge_loop()
             end
 
             bridge.up, bridge.failure = true, nil
+
+            local answer = reply and textutils.unserialiseJSON(reply)
+            if answer and answer.commands and #answer.commands > 0 then
+                serve(answer.commands)
+            end
+
             sleep(interval)
         else
             bridge.up = false

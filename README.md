@@ -1,3 +1,4 @@
+
 <p align="center">
   <img src="./banner.png" alt="Manifest — CC:Tweaked chest manager" width="100%">
 </p>
@@ -10,8 +11,11 @@
 
 # Manifest
 
-Manifest is a CC:Tweaked program that keeps a live index of every chest on a wired modem
-network and lets you search it and pull items from a touch monitor
+Manifest is my 4th stardance project and also a CC:Tweaked program that indexes every chest on a wired modem network so
+you can search it and pull items from a monitor
+
+# FOR THE STARDANCE REVIEWER
+THIS IS NOT A MINECRAFT MOD, THIS IS A SCRIPT FOR THE MOD CC: TWEAKED
 
 ## Usage
 
@@ -22,69 +26,31 @@ config    # pick the inventory items get sent to
 reboot    # Manifest is startup.lua, so it runs on boot
 ```
 
-Everything after that happens on the monitor. `config` can be re-run at any time from the
-computer's terminal when the storage setup changes, and the same picker lives in the
-Settings tab.
+Everything after that happens on the monitor. Re-run `config` whenever you change your storage setup
+changes also the same picker is in the Settings tab.
 
 ## Tabs
 
 | Tab | What it covers |
 | --- | --- |
-| `Manifest` | Search, the item list, and the request bar lets you pick an item, set an amount, pull it |
-| `Spatial` | AE2 spatial IO — load and unload cells, format a spare one, choose what pulses the port |
-| `Settings` | Output inventory, text scale, scan interval, and where the web bridge lives |
+| `Manifest` | Search, the item list, and a request bar for picking an item and pulling it |
+| `Spatial` | AE2 spatial IO, load and unload cells, format a spare one |
+| `Settings` | Output inventory, text scale, scan interval, bridge address |
 
 ## What is scanned
 
-Every inventory peripheral (chests, barrels, etc.) on the network except the output and AE2 Spatial Cell Barrel. If the output is on the wired network then inventories attached directly
-to the computer are skipped too, since they could never push to it.
+Every inventory peripheral on the network except the output and the cell barrel. Inventories touching the computer wont work if they arent connected to the network/have a connected modem
 
-All the chests are listed at once, so a scan costs about as long as the slowest single chest
-rather than the sum of them. Display names are worked out from the item id `getItemDetail`
-is far too slow to call on every scan, so search matches both, and typing `minecraft:` or a
-mod prefix narrows the list to one mod's items.
-
-Requests pull from one chest at a time until the amount is filled. Anything that comes up
-short keeps its remainder on the queue rather than disappearing, so pressing pull again picks
-up where it left off.
-
-## Spatial IO
-
-The Spatial tab controls an AE2 spatial IO port over the same network. Point it at the barrel
-where the cells live and each one gets a load or unload button. one click moves the cell into
-the port, pulses it, and puts the cell back in the slot it came from. Unformatted cells can
-be formatted from storage, which captures whatever the pylons enclose.
-
-The pulse comes from the computer's own redstone or from a networked redstone relay. A relay
-is set high on every side, so only the computer's own output needs a side picking.
+Search matches the item id as well as the display name, so typing `minecraft:` or a mod
+prefix narrows the list down to one mod's items.
 
 ## Web bridge
 
-`server/server.py` serves the working copy's Lua files to the computer so local edits can be
-tested without going through GitHub, and bakes its own address into the installer on the way
-out so the computer comes back to the same machine for the rest. `server/bridge.py`
-runs beside it on port 8081, holds the state the computer posts each tick, and serves a page
-that mirrors the monitor over SSE. Both need Flask and nothing else.
+`server/bridge.py` is a web interface that lets you request items from there,
+handy when there's nobody stood at the monitor to press pull. it requires Flask and runs on port 8081.
 
-```
-python server/server.py    # installer and Lua files, port 8080
-python server/bridge.py    # state and web page, port 8081
-```
-
-The item list is nearly all of the payload and nearly always unchanged, so it only rides along
-when it differs. Requests typed into the page come back as the reply to a tick and dispense on
-the spot, since there is nobody stood at the monitor to press pull.
-
-The bridge is optional. Manifest asks for its address on the first boot and writes the answer
-to `manifest.cfg`, so it never asks twice, blanking the `bridge=` line by hand is how you get
-asked again, and skipping it turns the whole thing off.
-
-## Configuration
-
-`manifest.cfg` sits next to the program and holds the output inventory, the cell barrel, the
-redstone target, the bridge address, text scale, scan interval and which cells are marked as
-loaded. It is written by the program and by `config`
-
+Manifest asks for its address on the first boot and writes the answer to `manifest.cfg`.
+Skipping the prompt will turn it off but you can blanking the `bridge=` line by hand to get asked again in the setup
 
 ## Disclaimer
 
